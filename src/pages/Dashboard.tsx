@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowRight, Copy, Link2, PanelLeftClose, PanelLeftOpen, Plus, Trash2, Users } from "lucide-react";
+import { Copy, Link2, PanelLeftClose, PanelLeftOpen, Plus, Trash2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -362,10 +362,6 @@ export default function Dashboard() {
                 Criar sala rápida
               </Button>
             )}
-            <Button variant="outline" onClick={joinRoom} className="w-full sm:w-auto gap-1.5">
-              <Link2 className="w-4 h-4" />
-              Entrar por link/código
-            </Button>
           </div>
         </section>
 
@@ -410,7 +406,10 @@ export default function Dashboard() {
         </section>
 
         <section className="bg-card rounded-xl border border-border p-4 sm:p-6 space-y-3">
-          <h2 className="text-sm font-medium">Acesso direto por link/código</h2>
+          <div className="space-y-1">
+            <h2 className="text-sm font-medium">Entrar por link ou código de sala</h2>
+            <p className="text-xs text-muted-foreground">Cole o link completo ou só o código curto da sala (ex: ab12cd).</p>
+          </div>
           <div className="flex flex-col sm:flex-row gap-2">
             <Input
               value={roomInput}
@@ -421,13 +420,9 @@ export default function Dashboard() {
             />
             <Button variant="outline" onClick={joinRoom} className="w-full sm:w-auto gap-1.5">
               <Link2 className="w-4 h-4" />
-              Entrar
+              Entrar na sala
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-            <ArrowRight className="w-3.5 h-3.5" />
-            Seu nome e sua squad ativa ficam salvos neste navegador.
-          </p>
         </section>
         </div>
       </main>
