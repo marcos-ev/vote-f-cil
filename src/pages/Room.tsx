@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
+import { useAuth } from '@/contexts/AuthContext';
 import { useRoom } from '@/hooks/useRoom';
+import { supabase } from '@/integrations/supabase/client';
 import { VotingCard } from '@/components/VotingCard';
 import { ParticipantCard } from '@/components/ParticipantCard';
 import { VoteStats } from '@/components/VoteStats';
@@ -9,7 +11,7 @@ import { DECK } from '@/types/poker';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
-  Spade, Copy, Check, Eye, RefreshCw, SkipForward, Trash2, Play, CheckCircle2, Loader2,
+  Spade, Copy, Check, Eye, RefreshCw, SkipForward, Trash2, Play, CheckCircle2, Loader2, ArrowLeft,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -17,34 +19,25 @@ export default function Room() {
   const { roomId } = useParams<{ roomId: string }>();
   const [searchParams] = useSearchParams();
   const isMod = searchParams.get('mod') === '1';
+  const teamId = searchParams.get('team');
+  const navigate = useNavigate();
+  const { user, profile } = useAuth();
 
-  const [name, setName] = useState('');
-  const [joined, setJoined] = useState(false);
+  const userName = profile?.display_name || user?.email || 'Jogador';
+
   const [storyInput, setStoryInput] = useState('');
   const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    const saved = localStorage.getItem('poker-user-name');
-    if (saved) {
-      setName(saved);
-      // Auto-join if name exists
-      setJoined(true);
-    }
-  }, []);
 
   const {
     participants, storyName, isVoting, isRevealed, history, connected,
     myVote, castVote, startVote, revealVotes, newRound, newStory, confirmEstimate, resetRoom,
-  } = useRoom(roomId || '', joined ? name : '', isMod);
-
-  const handleJoin = () => {
-    if (!name.trim()) return;
-    localStorage.setItem('poker-user-name', name.trim());
-    setJoined(true);
-  };
+  } = useRoom(roomId || '', userName, isMod);
 
   const handleCopyLink = () => {
-    const url = `${window.location.origin}/sala/${roomId}`;
+    // Participants join without mod flag, but with team
+    const url = teamId
+      ? `${window.location.origin}/sala/${roomId}?team=${teamId}`
+      : `${window.location.origin}/sala/${roomId}`;
     navigator.clipboard.writeText(url);
     setCopied(true);
     toast.success('Link copiado!');
@@ -57,6 +50,49 @@ export default function Room() {
     setStoryInput('');
   };
 
+  const handleConfirmEstimate = async (value: string) => {
+    confirmEstimate(value);
+
+    // Persist to DB if team is set
+    if (teamId && user) {
+      try {
+        const { data: session } = await supabase
+          .from('vote_sessions')
+          .insert({
+            team_id: teamId,
+            room_id: roomId!,
+            story_name: storyName,
+            final_estimate: value,
+            created_by: user.id,
+          })
+          .select()
+          .single();
+
+        if (session) {
+          // Save individual votes
+          const votesToInsert = Object.values(participants)
+            .filter(p => p.hasVoted && p.vote)
+            .map(p => ({
+              session_id: session.id,
+              user_id: user.id, // We only know own user_id for RLS
+              vote_value: p.vote!,
+            }));
+
+          // We can only insert our own vote due to RLS
+          if (myVote) {
+            await supabase.from('votes').insert({
+              session_id: session.id,
+              user_id: user.id,
+              vote_value: myVote,
+            });
+          }
+        }
+      } catch (e) {
+        // Non-critical, don't block flow
+      }
+    }
+  };
+
   const numericVotes = useMemo(() => {
     return Object.values(participants)
       .filter(p => p.hasVoted && p.vote !== null && p.vote !== '?' && p.vote !== '☕')
@@ -66,39 +102,11 @@ export default function Room() {
   const suggestedEstimate = useMemo(() => {
     if (numericVotes.length === 0) return null;
     const avg = numericVotes.reduce((a, b) => a + b, 0) / numericVotes.length;
-    // Find closest Fibonacci
     const deckNums = [0, 0.5, 1, 2, 3, 5, 8, 13, 20, 40, 100];
     return String(deckNums.reduce((prev, curr) =>
       Math.abs(curr - avg) < Math.abs(prev - avg) ? curr : prev
     ));
   }, [numericVotes]);
-
-  // Join screen
-  if (!joined) {
-    return (
-      <div className="min-h-screen flex items-center justify-center px-4">
-        <div className="w-full max-w-sm space-y-6">
-          <div className="text-center space-y-2">
-            <Spade className="w-8 h-8 text-primary mx-auto" />
-            <h1 className="text-2xl font-bold">Entrar na Sala</h1>
-            <p className="text-sm text-muted-foreground">Sala: {roomId}</p>
-          </div>
-          <div className="bg-card rounded-xl border border-border p-6 space-y-4">
-            <Input
-              value={name}
-              onChange={e => setName(e.target.value)}
-              placeholder="Seu nome..."
-              className="bg-secondary border-border"
-              onKeyDown={e => e.key === 'Enter' && handleJoin()}
-            />
-            <Button onClick={handleJoin} disabled={!name.trim()} className="w-full font-semibold">
-              Entrar
-            </Button>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   const participantList = Object.values(participants);
   const allVoted = participantList.length > 0 && participantList.every(p => p.hasVoted);
@@ -109,8 +117,11 @@ export default function Room() {
       <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-10">
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={() => navigate('/')} className="gap-1 text-xs p-1">
+              <ArrowLeft className="w-4 h-4" />
+            </Button>
             <Spade className="w-5 h-5 text-primary" />
-            <span className="font-bold text-sm">Planning Poker</span>
+            <span className="font-bold text-sm">CD2 Poker Planning</span>
           </div>
           <div className="flex items-center gap-2">
             <div className={`w-2 h-2 rounded-full ${connected ? 'bg-primary' : 'bg-destructive'}`} />
@@ -149,13 +160,11 @@ export default function Room() {
         {/* Active voting */}
         {isVoting && (
           <>
-            {/* Story name */}
             <div className="bg-card rounded-xl border border-border p-4 text-center">
               <p className="text-xs text-muted-foreground mb-1">Votando em</p>
               <h2 className="text-lg font-bold font-mono">{storyName}</h2>
             </div>
 
-            {/* Cards */}
             {!isRevealed && (
               <div className="flex flex-wrap justify-center gap-3">
                 {DECK.map((value, i) => (
@@ -170,7 +179,6 @@ export default function Room() {
               </div>
             )}
 
-            {/* Participants */}
             <div className="bg-card rounded-xl border border-border p-4">
               <h3 className="text-sm font-medium mb-3">Participantes</h3>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -180,16 +188,14 @@ export default function Room() {
               </div>
             </div>
 
-            {/* Stats after reveal */}
             {isRevealed && <VoteStats participants={participants} />}
 
-            {/* Moderator vote controls */}
             {isMod && (
               <div className="flex flex-wrap gap-2 justify-center">
                 {!isRevealed ? (
-                  <Button onClick={revealVotes} className="gap-1.5 font-semibold" disabled={!allVoted && participantList.length > 1}>
+                  <Button onClick={revealVotes} className="gap-1.5 font-semibold">
                     <Eye className="w-4 h-4" />
-                    {allVoted ? 'Revelar Votos' : 'Revelar Votos'}
+                    Revelar Votos
                   </Button>
                 ) : (
                   <>
@@ -202,7 +208,7 @@ export default function Room() {
                       Nova História
                     </Button>
                     {suggestedEstimate && (
-                      <Button onClick={() => confirmEstimate(suggestedEstimate)} className="gap-1.5 font-semibold">
+                      <Button onClick={() => handleConfirmEstimate(suggestedEstimate)} className="gap-1.5 font-semibold">
                         <CheckCircle2 className="w-4 h-4" />
                         Confirmar Estimativa ({suggestedEstimate})
                       </Button>
@@ -212,7 +218,6 @@ export default function Room() {
               </div>
             )}
 
-            {/* Waiting indicator for non-moderator */}
             {!isMod && !isRevealed && myVote && (
               <div className="text-center text-sm text-muted-foreground flex items-center justify-center gap-2">
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -222,7 +227,6 @@ export default function Room() {
           </>
         )}
 
-        {/* Waiting for vote to start */}
         {!isVoting && !isMod && (
           <div className="text-center py-16 space-y-3">
             <Loader2 className="w-8 h-8 animate-spin text-muted-foreground mx-auto" />
@@ -230,10 +234,8 @@ export default function Room() {
           </div>
         )}
 
-        {/* Session History */}
         <SessionHistory history={history} />
 
-        {/* Reset room (moderator only) */}
         {isMod && history.length > 0 && (
           <div className="text-center">
             <Button variant="ghost" size="sm" onClick={resetRoom} className="text-destructive hover:text-destructive gap-1.5 text-xs">
