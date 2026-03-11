@@ -1,160 +1,146 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { supabase } from '@/integrations/supabase/client';
-import type { Participant, RoomState, Story } from '@/types/poker';
-import { RealtimeChannel } from '@supabase/supabase-js';
+import { useState, useEffect, useCallback, useRef } from "react";
+import { apiGetRoom, apiLeaveRoom, apiRoomAction, apiUpsertPresence } from "@/lib/api";
+import { connectRoomRealtime } from "@/lib/realtime";
+import type { RoomState } from "@/types/poker";
+import { toast } from "sonner";
 
 const generateId = () => Math.random().toString(36).substring(2, 15);
 
+function getErrorMessage(error: unknown, fallback: string) {
+  const message = error instanceof Error ? error.message.trim() : "";
+  return message || fallback;
+}
+
+const emptyRoomState = (roomId: string): RoomState => ({
+  roomId,
+  storyName: "",
+  isVoting: false,
+  isRevealed: false,
+  participants: {},
+  history: [],
+  updatedAt: Date.now(),
+});
+
 export function useRoom(roomId: string, userName: string, isModerator: boolean) {
   const myId = useRef(localStorage.getItem(`poker-user-id-${roomId}`) || generateId());
-  const channelRef = useRef<RealtimeChannel | null>(null);
-
-  const [participants, setParticipants] = useState<Record<string, Participant>>({});
-  const [storyName, setStoryName] = useState('');
-  const [isVoting, setIsVoting] = useState(false);
-  const [isRevealed, setIsRevealed] = useState(false);
-  const [history, setHistory] = useState<Story[]>([]);
   const [connected, setConnected] = useState(false);
+  const [roomState, setRoomState] = useState<RoomState>(() => emptyRoomState(roomId));
 
   useEffect(() => {
     localStorage.setItem(`poker-user-id-${roomId}`, myId.current);
   }, [roomId]);
 
-  useEffect(() => {
-    if (!userName || !roomId) return;
+  const refreshRoom = useCallback(async () => {
+    if (!roomId) return;
+    const { room } = await apiGetRoom(roomId);
+    setRoomState(room);
+  }, [roomId]);
 
-    const channel = supabase.channel(`room:${roomId}`, {
-      config: { presence: { key: myId.current } },
-    });
-
-    channelRef.current = channel;
-
-    channel
-      .on('presence', { event: 'sync' }, () => {
-        const state = channel.presenceState<{
-          name: string;
-          role: string;
-          vote: string | null;
-          hasVoted: boolean;
-          id: string;
-        }>();
-        const newParticipants: Record<string, Participant> = {};
-        Object.entries(state).forEach(([key, presences]) => {
-          const p = presences[0];
-          if (p) {
-            newParticipants[key] = {
-              id: key,
-              name: p.name,
-              role: p.role as 'moderator' | 'player',
-              vote: p.vote,
-              hasVoted: p.hasVoted,
-            };
-          }
-        });
-        setParticipants(newParticipants);
-      })
-      .on('broadcast', { event: 'room-update' }, ({ payload }) => {
-        if (payload.storyName !== undefined) setStoryName(payload.storyName);
-        if (payload.isVoting !== undefined) setIsVoting(payload.isVoting);
-        if (payload.isRevealed !== undefined) setIsRevealed(payload.isRevealed);
-        if (payload.history !== undefined) setHistory(payload.history);
-        // If votes are cleared, reset own vote via presence
-        if (payload.clearVotes) {
-          channel.track({
-            id: myId.current,
-            name: userName,
-            role: isModerator ? 'moderator' : 'player',
-            vote: null,
-            hasVoted: false,
-          });
-        }
-      })
-      .subscribe(async (status) => {
-        if (status === 'SUBSCRIBED') {
-          setConnected(true);
-          await channel.track({
-            id: myId.current,
-            name: userName,
-            role: isModerator ? 'moderator' : 'player',
-            vote: null,
-            hasVoted: false,
-          });
-        }
+  const upsertPresence = useCallback(
+    async (vote: string | null, hasVoted: boolean) => {
+      if (!roomId || !userName) return;
+      await apiUpsertPresence(roomId, {
+        participantId: myId.current,
+        name: userName,
+        role: isModerator ? "moderator" : "player",
+        vote,
+        hasVoted,
       });
+    },
+    [isModerator, roomId, userName],
+  );
 
+  const runRoomAction = useCallback(
+    async (
+      action: "start_vote" | "reveal_votes" | "new_round" | "new_story" | "confirm_estimate" | "reset_room",
+      payload?: { storyName?: string; finalEstimate?: string },
+    ) => {
+      if (!roomId) return;
+      await apiRoomAction(roomId, { action, ...payload });
+    },
+    [roomId],
+  );
+
+  useEffect(() => {
+    if (!roomId) return;
+    void refreshRoom().catch(() => undefined);
+    const connection = connectRoomRealtime(roomId, {
+      onOpen: () => setConnected(true),
+      onClose: () => setConnected(false),
+      onRoomUpdate: (state) => setRoomState(state),
+    });
     return () => {
-      channel.unsubscribe();
-      channelRef.current = null;
+      connection.close();
     };
-  }, [roomId, userName, isModerator]);
+  }, [refreshRoom, roomId]);
 
-  const castVote = useCallback((value: string) => {
-    channelRef.current?.track({
-      id: myId.current,
-      name: userName,
-      role: isModerator ? 'moderator' : 'player',
-      vote: value,
-      hasVoted: true,
-    });
-  }, [userName, isModerator]);
+  useEffect(() => {
+    if (!roomId || !userName) return;
+    void upsertPresence(null, false).catch(() => undefined);
+    return () => {
+      void apiLeaveRoom(roomId, myId.current).catch(() => undefined);
+    };
+  }, [roomId, upsertPresence, userName]);
 
-  const broadcast = useCallback((payload: Record<string, unknown>) => {
-    channelRef.current?.send({
-      type: 'broadcast',
-      event: 'room-update',
-      payload,
-    });
-  }, []);
+  const castVote = useCallback(
+    (value: string) => {
+      void upsertPresence(value, true).catch((error) => {
+        toast.error(`Falha ao enviar voto. ${getErrorMessage(error, "Tente novamente.")}`);
+      });
+    },
+    [upsertPresence],
+  );
 
-  const startVote = useCallback((story: string) => {
-    setStoryName(story);
-    setIsVoting(true);
-    setIsRevealed(false);
-    broadcast({ storyName: story, isVoting: true, isRevealed: false, clearVotes: true });
-  }, [broadcast]);
+  const startVote = useCallback(
+    (story: string) => {
+      void runRoomAction("start_vote", { storyName: story }).catch((error) => {
+        toast.error(`Falha ao iniciar votação. ${getErrorMessage(error, "Tente novamente.")}`);
+      });
+    },
+    [runRoomAction],
+  );
 
   const revealVotes = useCallback(() => {
-    setIsRevealed(true);
-    broadcast({ isRevealed: true });
-  }, [broadcast]);
+    void runRoomAction("reveal_votes").catch((error) => {
+      toast.error(`Falha ao revelar votos. ${getErrorMessage(error, "Tente novamente.")}`);
+    });
+  }, [runRoomAction]);
 
   const newRound = useCallback(() => {
-    setIsRevealed(false);
-    broadcast({ isRevealed: false, clearVotes: true });
-  }, [broadcast]);
+    void runRoomAction("new_round").catch((error) => {
+      toast.error(`Falha ao iniciar nova rodada. ${getErrorMessage(error, "Tente novamente.")}`);
+    });
+  }, [runRoomAction]);
 
   const newStory = useCallback(() => {
-    setStoryName('');
-    setIsVoting(false);
-    setIsRevealed(false);
-    broadcast({ storyName: '', isVoting: false, isRevealed: false, clearVotes: true });
-  }, [broadcast]);
+    void runRoomAction("new_story").catch((error) => {
+      toast.error(`Falha ao limpar história atual. ${getErrorMessage(error, "Tente novamente.")}`);
+    });
+  }, [runRoomAction]);
 
-  const confirmEstimate = useCallback((finalValue: string) => {
-    const newHistory = [...history, { name: storyName, finalEstimate: finalValue }];
-    setHistory(newHistory);
-    setStoryName('');
-    setIsVoting(false);
-    setIsRevealed(false);
-    broadcast({ history: newHistory, storyName: '', isVoting: false, isRevealed: false, clearVotes: true });
-  }, [broadcast, history, storyName]);
+  const confirmEstimate = useCallback(
+    (finalValue: string) => {
+      void runRoomAction("confirm_estimate", { finalEstimate: finalValue }).catch((error) => {
+        toast.error(`Falha ao confirmar estimativa. ${getErrorMessage(error, "Tente novamente.")}`);
+      });
+    },
+    [runRoomAction],
+  );
 
   const resetRoom = useCallback(() => {
-    setHistory([]);
-    setStoryName('');
-    setIsVoting(false);
-    setIsRevealed(false);
-    broadcast({ history: [], storyName: '', isVoting: false, isRevealed: false, clearVotes: true });
-  }, [broadcast]);
+    void runRoomAction("reset_room").catch((error) => {
+      toast.error(`Falha ao resetar sala. ${getErrorMessage(error, "Tente novamente.")}`);
+    });
+  }, [runRoomAction]);
 
-  const myVote = participants[myId.current]?.vote ?? null;
+  const myVote = roomState.participants[myId.current]?.vote ?? null;
 
   return {
-    participants,
-    storyName,
-    isVoting,
-    isRevealed,
-    history,
+    participants: roomState.participants,
+    storyName: roomState.storyName,
+    isVoting: roomState.isVoting,
+    isRevealed: roomState.isRevealed,
+    history: roomState.history,
     connected,
     myId: myId.current,
     myVote,

@@ -20,7 +20,7 @@ export function ParticipantCard({ participant, isRevealed }: ParticipantCardProp
             className={cn(
               'card-front flex items-center justify-center rounded-lg border-2 text-xs font-bold',
               hasVoted
-                ? 'bg-primary/20 border-primary text-primary'
+                ? 'bg-primary/20 border-primary text-primary dark:text-foreground'
                 : 'bg-muted border-border text-muted-foreground animate-pulse-glow'
             )}
           >
@@ -40,7 +40,7 @@ export function ParticipantCard({ participant, isRevealed }: ParticipantCardProp
         </div>
         <span className={cn(
           'text-xs',
-          hasVoted ? 'text-primary' : 'text-muted-foreground'
+          hasVoted ? 'text-primary dark:text-foreground' : 'text-muted-foreground'
         )}>
           {hasVoted ? 'Votou ✓' : 'Aguardando…'}
         </span>

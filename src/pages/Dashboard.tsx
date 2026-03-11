@@ -1,191 +1,448 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useAuth } from '@/contexts/AuthContext';
-import { supabase } from '@/integrations/supabase/client';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import {
-  Spade, Plus, Users, LogOut, ArrowRight, Loader2, Trash2,
-} from 'lucide-react';
-import { toast } from 'sonner';
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { ArrowRight, Copy, Link2, PanelLeftClose, PanelLeftOpen, Plus, Trash2, Users } from "lucide-react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { DeleteSquadDialog } from "@/components/delete-squad-dialog";
+import { brandAssets } from "@/lib/branding";
+import { apiCreateSquad, apiDeleteSquad, apiJoinSquad, apiListSquads, apiListSquadsForSession } from "@/lib/api";
+import { bindSquadRoom, getLastSquadId, resolveSquadRoomId, setLastSquadId } from "@/lib/squad-room";
+import { getOrCreateSessionId } from "@/lib/session";
 
-interface Team {
-  id: string;
-  name: string;
-  description: string | null;
-  created_by: string;
+const LAST_NAME_KEY = "poker-display-name";
+const generateRoomId = () => Math.random().toString(36).substring(2, 8);
+type Squad = Awaited<ReturnType<typeof apiListSquads>>["squads"][number];
+
+function getApiErrorMessage(error: unknown, fallback: string) {
+  const raw = error instanceof Error ? String(error.message || "").trim() : "";
+  if (!raw) return fallback;
+  try {
+    const parsed = JSON.parse(raw) as { error?: string };
+    return parsed.error || fallback;
+  } catch {
+    return raw || fallback;
+  }
 }
 
-const generateRoomId = () => Math.random().toString(36).substring(2, 8);
+function extractRoomId(value: string): string | null {
+  const input = value.trim();
+  if (!input) return null;
+  if (!input.includes("/")) return input;
+  try {
+    const url = new URL(input);
+    const parts = url.pathname.split("/").filter(Boolean);
+    if (parts[0] === "sala" && parts[1]) return parts[1];
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 export default function Dashboard() {
-  const { user, profile, signOut } = useAuth();
   const navigate = useNavigate();
-  const [teams, setTeams] = useState<Team[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [showCreate, setShowCreate] = useState(false);
-  const [teamName, setTeamName] = useState('');
-  const [teamDesc, setTeamDesc] = useState('');
-  const [joinCode, setJoinCode] = useState('');
-  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState(localStorage.getItem(LAST_NAME_KEY) || "");
+  const [squads, setSquads] = useState<Squad[]>([]);
+  const [newSquadName, setNewSquadName] = useState("");
+  const [inviteCodeInput, setInviteCodeInput] = useState("");
+  const [activeSquadId, setActiveSquadId] = useState(getLastSquadId());
+  const [roomInput, setRoomInput] = useState("");
+  const [creatingSquad, setCreatingSquad] = useState(false);
+  const [joiningInvite, setJoiningInvite] = useState(false);
+  const [loadingSquads, setLoadingSquads] = useState(true);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [deletingSquadId, setDeletingSquadId] = useState("");
+  const [squadToDelete, setSquadToDelete] = useState<Squad | null>(null);
 
-  const fetchTeams = async () => {
-    const { data } = await supabase
-      .from('team_members')
-      .select('team_id')
-      .eq('user_id', user!.id);
+  const canStart = useMemo(() => name.trim().length >= 2, [name]);
+  const activeSquad = squads.find((s) => s.id === activeSquadId);
+  const sessionId = useMemo(() => getOrCreateSessionId(), []);
 
-    if (data && data.length > 0) {
-      const teamIds = data.map(d => d.team_id);
-      const { data: teamsData } = await supabase
-        .from('teams')
-        .select('*')
-        .in('id', teamIds);
-      setTeams(teamsData || []);
-    } else {
-      setTeams([]);
+  const persistIdentity = () => {
+    localStorage.setItem(LAST_NAME_KEY, name.trim());
+    if (activeSquadId) setLastSquadId(activeSquadId);
+  };
+
+  const goToRoom = (squad?: { id: string; name: string }, preferredRoomId?: string) => {
+    const roomId = preferredRoomId || generateRoomId();
+    const params = new URLSearchParams({
+      mod: "1",
+      name: name.trim(),
+    });
+    if (squad) {
+      params.set("squadId", squad.id);
+      params.set("squadName", squad.name);
+      bindSquadRoom(squad.id, roomId);
     }
-    setLoading(false);
+    navigate(`/sala/${roomId}?${params.toString()}`);
+  };
+
+  const fetchSquads = async () => {
+    try {
+      setLoadingSquads(true);
+      const result = await apiListSquadsForSession(sessionId);
+      setSquads(result.squads);
+    } catch (error) {
+      console.error(error);
+      toast.error("Falha ao carregar squads. Tente novamente.");
+    } finally {
+      setLoadingSquads(false);
+    }
   };
 
   useEffect(() => {
-    fetchTeams();
-  }, [user]);
+    void fetchSquads();
+  }, [sessionId]);
 
-  const handleCreateTeam = async () => {
-    if (!teamName.trim()) return;
-    setCreating(true);
-
-    const { data: team, error } = await supabase
-      .from('teams')
-      .insert({ name: teamName.trim(), description: teamDesc.trim() || null, created_by: user!.id })
-      .select()
-      .single();
-
-    if (error) {
-      toast.error('Erro ao criar equipe');
-      setCreating(false);
+  const createSquad = async () => {
+    if (!canStart) {
+      toast.error("Digite seu nome primeiro");
+      return;
+    }
+    if (!newSquadName.trim()) {
+      toast.error("Digite o nome da squad");
       return;
     }
 
-    // Add creator as member
-    await supabase.from('team_members').insert({
-      team_id: team.id,
-      user_id: user!.id,
-      role: 'admin',
-    });
-
-    toast.success('Equipe criada!');
-    setTeamName('');
-    setTeamDesc('');
-    setShowCreate(false);
-    setCreating(false);
-    fetchTeams();
+    setCreatingSquad(true);
+    try {
+      const result = await apiCreateSquad({
+        name: newSquadName.trim(),
+        createdByName: name.trim(),
+        ownerSessionId: sessionId,
+      });
+      const squad = result.squad;
+      toast.success(`Squad criada! Convite: ${squad.invite_code}`);
+      setNewSquadName("");
+      setActiveSquadId(squad.id);
+      localStorage.setItem(LAST_NAME_KEY, name.trim());
+      setLastSquadId(squad.id);
+      await fetchSquads();
+      goToRoom({ id: squad.id, name: squad.name });
+    } catch (error) {
+      console.error(error);
+      toast.error("Não foi possível criar a squad.");
+    } finally {
+      setCreatingSquad(false);
+    }
   };
 
-  const handleStartRoom = (teamId: string) => {
-    const roomId = generateRoomId();
-    navigate(`/sala/${roomId}?mod=1&team=${teamId}`);
+  const joinSquadByInvite = async () => {
+    if (!canStart) {
+      toast.error("Digite seu nome primeiro");
+      return;
+    }
+    if (!inviteCodeInput.trim()) {
+      toast.error("Digite o código de convite");
+      return;
+    }
+
+    setJoiningInvite(true);
+    try {
+      const result = await apiJoinSquad({
+        inviteCode: inviteCodeInput.trim().toUpperCase(),
+        userName: name.trim(),
+      });
+      const squad = result.squad;
+      setInviteCodeInput("");
+      setActiveSquadId(squad.id);
+      localStorage.setItem(LAST_NAME_KEY, name.trim());
+      setLastSquadId(squad.id);
+      await fetchSquads();
+      const roomId = resolveSquadRoomId(squad.id);
+      toast.success(`Você entrou na squad ${squad.name}. Abrindo sala...`);
+      goToRoom({ id: squad.id, name: squad.name }, roomId);
+    } catch (error: any) {
+      console.error(error);
+      const message = String(error?.message || "");
+      toast.error(message.includes("convite inválido") ? "Convite inválido" : "Não foi possível entrar na squad.");
+    } finally {
+      setJoiningInvite(false);
+    }
+  };
+
+  const deleteSquad = async (squad: Squad) => {
+    setDeletingSquadId(squad.id);
+    try {
+      await apiDeleteSquad(squad.id, sessionId);
+      if (activeSquadId === squad.id) {
+        setActiveSquadId("");
+      }
+      await fetchSquads();
+      toast.success(`Squad "${squad.name}" apagada.`);
+    } catch (error: any) {
+      toast.error(getApiErrorMessage(error, "Falha ao apagar squad."));
+    } finally {
+      setDeletingSquadId("");
+      setSquadToDelete(null);
+    }
+  };
+
+  const goToActiveSquadRoom = () => {
+    if (!canStart) {
+      toast.error("Digite seu nome para continuar");
+      return;
+    }
+    persistIdentity();
+    if (!activeSquad) {
+      toast.error("Selecione uma squad ativa para continuar.");
+      return;
+    }
+    const roomId = resolveSquadRoomId(activeSquad.id);
+    goToRoom({ id: activeSquad.id, name: activeSquad.name }, roomId);
+  };
+
+  const createQuickRoom = () => {
+    if (!canStart) {
+      toast.error("Digite seu nome para continuar");
+      return;
+    }
+    persistIdentity();
+    goToRoom();
+  };
+
+  const joinRoom = () => {
+    if (!canStart) {
+      toast.error("Digite seu nome para entrar na sala");
+      return;
+    }
+    const roomId = extractRoomId(roomInput);
+    if (!roomId) {
+      toast.error("Código ou link de sala inválido");
+      return;
+    }
+    persistIdentity();
+    const params = new URLSearchParams({ name: name.trim() });
+    if (activeSquad) {
+      params.set("squadId", activeSquad.id);
+      params.set("squadName", activeSquad.name);
+    }
+    navigate(`/sala/${roomId}?${params.toString()}`);
   };
 
   return (
     <div className="min-h-screen">
-      {/* Header */}
       <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-10">
-        <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Spade className="w-5 h-5 text-primary" />
-            <span className="font-bold text-sm">CD2 Poker Planning</span>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="text-sm text-muted-foreground">{profile?.display_name}</span>
-            <Button variant="ghost" size="sm" onClick={signOut} className="gap-1.5 text-xs">
-              <LogOut className="w-3.5 h-3.5" />
-              Sair
-            </Button>
+        <div className="max-w-4xl mx-auto px-4 py-3 relative flex items-center justify-center">
+          <button
+            type="button"
+            onClick={() => navigate("/")}
+            aria-label="Voltar para a tela principal"
+            className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
+          >
+            <img src={brandAssets.wordmarkDark} alt="CD2 Tech" className="h-8 hidden dark:block cursor-pointer" />
+            <img src={brandAssets.wordmarkLight} alt="CD2 Tech" className="h-8 block dark:hidden cursor-pointer" />
+          </button>
+          <div className="absolute right-4">
+            <ThemeToggle />
           </div>
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto px-4 py-8 space-y-6">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold">Suas Equipes</h1>
-          <Button onClick={() => setShowCreate(!showCreate)} className="gap-1.5">
-            <Plus className="w-4 h-4" />
-            Nova Equipe
-          </Button>
-        </div>
-
-        {/* Create team form */}
-        {showCreate && (
-          <div className="bg-card rounded-xl border border-border p-5 space-y-3">
-            <h3 className="text-sm font-medium">Criar Nova Equipe</h3>
-            <Input
-              value={teamName}
-              onChange={e => setTeamName(e.target.value)}
-              placeholder="Nome da equipe (ex: Squad N3, Projetos)"
-              className="bg-secondary border-border"
-            />
-            <Input
-              value={teamDesc}
-              onChange={e => setTeamDesc(e.target.value)}
-              placeholder="Descrição (opcional)"
-              className="bg-secondary border-border"
-            />
-            <div className="flex gap-2">
-              <Button onClick={handleCreateTeam} disabled={!teamName.trim() || creating} className="font-semibold">
-                {creating ? 'Criando...' : 'Criar Equipe'}
+      <aside
+        className={`hidden md:block fixed left-0 top-0 h-screen pt-16 bg-card border-r border-border p-3 transition-all z-20 ${
+          sidebarCollapsed ? "w-16" : "w-72"
+        }`}
+      >
+            <div className="flex items-center justify-between gap-2">
+              {!sidebarCollapsed && <h3 className="text-sm font-semibold">Squads</h3>}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 w-8 p-0"
+                onClick={() => setSidebarCollapsed((v) => !v)}
+                aria-label="Alternar sidebar"
+              >
+                {sidebarCollapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
               </Button>
-              <Button variant="ghost" onClick={() => setShowCreate(false)}>Cancelar</Button>
             </div>
-          </div>
-        )}
-
-        {/* Teams list */}
-        {loading ? (
-          <div className="text-center py-16">
-            <Loader2 className="w-8 h-8 animate-spin text-muted-foreground mx-auto" />
-          </div>
-        ) : teams.length === 0 ? (
-          <div className="text-center py-16 space-y-3">
-            <Users className="w-12 h-12 text-muted-foreground/40 mx-auto" />
-            <p className="text-muted-foreground">Você ainda não faz parte de nenhuma equipe</p>
-            <p className="text-xs text-muted-foreground/60">Crie uma equipe ou peça o link de convite de alguém</p>
-          </div>
-        ) : (
-          <div className="grid gap-3">
-            {teams.map(team => (
-              <div key={team.id} className="bg-card rounded-xl border border-border p-5 flex items-center justify-between">
-                <div>
-                  <h3 className="font-semibold">{team.name}</h3>
-                  {team.description && (
-                    <p className="text-sm text-muted-foreground mt-0.5">{team.description}</p>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
+            {!sidebarCollapsed && (
+              <div className="mt-3 space-y-2">
+                <p className="text-xs text-muted-foreground">Escolha a squad sem se perder no fluxo.</p>
+                <p className="text-xs text-muted-foreground">A lixeira aparece apenas para squads criadas por você.</p>
+                {loadingSquads ? (
+                  <p className="text-xs text-muted-foreground">Carregando squads...</p>
+                ) : squads.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">Sem squads disponíveis.</p>
+                ) : (
+                  <div className="space-y-1.5 max-h-72 overflow-auto pr-1">
+                    {squads.map((s) => (
+                      <div
+                        key={s.id}
+                        className={`w-full rounded-md border px-2 py-1.5 text-sm transition-colors flex items-center gap-1 ${
+                          s.id === activeSquadId
+                            ? "border-primary bg-primary/10 text-foreground"
+                            : "border-border bg-secondary/30 hover:bg-secondary"
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveSquadId(s.id);
+                            if (!canStart) {
+                              toast.error("Digite seu nome para entrar na sala da squad");
+                              return;
+                            }
+                            localStorage.setItem(LAST_NAME_KEY, name.trim());
+                            setLastSquadId(s.id);
+                            const roomId = resolveSquadRoomId(s.id);
+                            goToRoom({ id: s.id, name: s.name }, roomId);
+                          }}
+                          className="flex-1 text-left px-0.5 py-0.5"
+                        >
+                          {s.name}
+                        </button>
+                        {s.canDelete && (
+                          <button
+                            type="button"
+                            title="Apagar squad"
+                            aria-label={`Apagar squad ${s.name}`}
+                            className="p-1 rounded hover:bg-destructive/15 text-destructive disabled:opacity-50"
+                            disabled={deletingSquadId === s.id}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSquadToDelete(s);
+                            }}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {activeSquad && (
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => navigate(`/equipe/${team.id}`)}
-                    className="gap-1.5 text-xs"
+                    className="w-full mt-2 gap-1.5"
+                    onClick={() => {
+                      navigator.clipboard.writeText(activeSquad.invite_code);
+                      toast.success("Convite copiado");
+                    }}
                   >
-                    <Users className="w-3.5 h-3.5" />
-                    Ver Equipe
+                    <Copy className="w-3.5 h-3.5" />
+                    Copiar convite
                   </Button>
-                  <Button
-                    size="sm"
-                    onClick={() => handleStartRoom(team.id)}
-                    className="gap-1.5 text-xs font-semibold"
-                  >
-                    <ArrowRight className="w-3.5 h-3.5" />
-                    Iniciar Sala
-                  </Button>
-                </div>
+                )}
               </div>
-            ))}
+            )}
+      </aside>
+
+      <main className={`${sidebarCollapsed ? "md:pl-20" : "md:pl-72"} px-4 py-6 sm:py-8 transition-all`}>
+        <div className="max-w-4xl mx-auto space-y-6">
+        <section className="bg-card rounded-xl border border-border p-4 sm:p-6 space-y-4">
+          <div className="space-y-1">
+            <h1 className="text-xl sm:text-2xl font-bold">Poker Planning interno</h1>
+            <p className="text-sm text-muted-foreground">Escolha a squad ativa e entre na sala em um clique.</p>
           </div>
-        )}
+
+          <div className="grid gap-3 md:grid-cols-1">
+            <div>
+              <label className="text-sm font-medium mb-1.5 block">Seu nome</label>
+              <Input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Ex: Marco"
+                className="bg-secondary border-border"
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {activeSquad ? (
+              <Button onClick={goToActiveSquadRoom} className="w-full sm:w-auto gap-1.5 font-semibold">
+                <Users className="w-4 h-4" />
+                Entrar na sala da squad
+              </Button>
+            ) : (
+              <Button onClick={createQuickRoom} className="w-full sm:w-auto gap-1.5 font-semibold">
+                <Users className="w-4 h-4" />
+                Criar sala rápida
+              </Button>
+            )}
+            <Button variant="outline" onClick={joinRoom} className="w-full sm:w-auto gap-1.5">
+              <Link2 className="w-4 h-4" />
+              Entrar por link/código
+            </Button>
+          </div>
+        </section>
+
+        <section className="bg-card rounded-xl border border-border p-4 sm:p-6 space-y-4">
+          <h2 className="text-sm font-medium">Gerenciar squads</h2>
+          <p className="text-xs text-muted-foreground">
+            Crie uma squad nova ou entre por convite. Ao concluir, você entra direto na sala da squad.
+          </p>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="space-y-2">
+              <label className="text-xs text-muted-foreground">Criar squad</label>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <Input
+                  value={newSquadName}
+                  onChange={(e) => setNewSquadName(e.target.value)}
+                  placeholder="Ex: Squad Backend"
+                  className="bg-secondary border-border"
+                />
+                <Button onClick={createSquad} disabled={creatingSquad} className="w-full sm:w-auto gap-1.5">
+                  <Plus className="w-4 h-4" />
+                  {creatingSquad ? "Criando..." : "Criar"}
+                </Button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs text-muted-foreground">Entrar por convite</label>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <Input
+                  value={inviteCodeInput}
+                  onChange={(e) => setInviteCodeInput(e.target.value.toUpperCase())}
+                  placeholder="Código da squad (ex: AB12CD)"
+                  className="bg-secondary border-border"
+                />
+                <Button variant="outline" onClick={joinSquadByInvite} disabled={joiningInvite} className="w-full sm:w-auto">
+                  {joiningInvite ? "Entrando..." : "Entrar"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="bg-card rounded-xl border border-border p-4 sm:p-6 space-y-3">
+          <h2 className="text-sm font-medium">Acesso direto por link/código</h2>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <Input
+              value={roomInput}
+              onChange={(e) => setRoomInput(e.target.value)}
+              placeholder="Ex: ab12cd ou https://.../sala/ab12cd"
+              className="bg-secondary border-border flex-1"
+              onKeyDown={(e) => e.key === "Enter" && joinRoom()}
+            />
+            <Button variant="outline" onClick={joinRoom} className="w-full sm:w-auto gap-1.5">
+              <Link2 className="w-4 h-4" />
+              Entrar
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+            <ArrowRight className="w-3.5 h-3.5" />
+            Seu nome e sua squad ativa ficam salvos neste navegador.
+          </p>
+        </section>
+        </div>
       </main>
+      <DeleteSquadDialog
+        open={Boolean(squadToDelete)}
+        squadName={squadToDelete?.name || ""}
+        isDeleting={Boolean(squadToDelete && deletingSquadId === squadToDelete.id)}
+        onOpenChange={(open) => {
+          if (!open && !deletingSquadId) setSquadToDelete(null);
+        }}
+        onConfirm={async () => {
+          if (!squadToDelete) return;
+          await deleteSquad(squadToDelete);
+        }}
+      />
     </div>
   );
 }

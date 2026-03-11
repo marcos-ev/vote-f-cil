@@ -7,7 +7,8 @@ interface VoteStatsProps {
 export function VoteStats({ participants }: VoteStatsProps) {
   const votes = Object.values(participants)
     .filter(p => p.hasVoted && p.vote !== null && p.vote !== '?' && p.vote !== '☕')
-    .map(p => Number(p.vote));
+    .map(p => Number(p.vote))
+    .filter(v => !Number.isNaN(v));
 
   if (votes.length === 0) {
     return (
@@ -38,11 +39,13 @@ export function VoteStats({ participants }: VoteStatsProps) {
   ];
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
       {stats.map(s => (
         <div key={s.label} className="bg-secondary rounded-lg p-3 text-center">
           <div className="text-xs text-muted-foreground mb-1">{s.label}</div>
-          <div className="text-xl font-mono font-bold text-primary">{s.value}</div>
+          <div className="text-lg sm:text-xl font-mono font-bold text-primary dark:text-foreground break-words">
+            {s.value}
+          </div>
         </div>
       ))}
     </div>
