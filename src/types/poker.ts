@@ -19,5 +19,5 @@ export interface RoomState {
   history: Story[];
 }
 
-export const DECK = ['0', '1', '2', '3', '5', '8', '13', '21', '34', '55', '89', '?', '☕'] as const;
+export const DECK = ['?', '☕', '0', '0.5', '1', '2', '3', '5', '8', '13', '20', '40', '100'] as const;
 export type CardValue = typeof DECK[number];
