@@ -5,8 +5,28 @@ import { squadsRouter } from "./routes/squads";
 import { roomsRouter } from "./routes/rooms";
 import { createRealtimeServer } from "./ws";
 
+const ALLOWED_ORIGINS = [
+  "https://pokerplanning-one.vercel.app",
+  "https://pokerplanning-git-main-marcosevs-projects.vercel.app",
+  "https://pokerplanning-27jjusi6x-marcosevs-projects.vercel.app",
+  // local dev
+  "http://localhost:8080",
+  "http://localhost:5173",
+];
+
 const app = express();
-app.use(cors());
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error(`CORS bloqueado para origem: ${origin}`));
+      }
+    },
+    credentials: true,
+  }),
+);
 app.use(express.json());
 
 app.get("/health", (_req, res) => {
