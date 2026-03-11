@@ -67,8 +67,8 @@ export default function Room() {
     if (numericVotes.length === 0) return null;
     const avg = numericVotes.reduce((a, b) => a + b, 0) / numericVotes.length;
     // Find closest Fibonacci
-    const fibs = [0, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89];
-    return String(fibs.reduce((prev, curr) =>
+    const deckNums = [0, 0.5, 1, 2, 3, 5, 8, 13, 20, 40, 100];
+    return String(deckNums.reduce((prev, curr) =>
       Math.abs(curr - avg) < Math.abs(prev - avg) ? curr : prev
     ));
   }, [numericVotes]);
