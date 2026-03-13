@@ -48,7 +48,7 @@ function debugLog(hypothesisId: string, message: string, data: Record<string, un
 }
 
 function isValidRoomId(roomId: string) {
-  return /^[a-zA-Z0-9_-]{4,32}$/.test(roomId);
+  return /^[a-zA-Z0-9_-]{4,64}$/.test(roomId);
 }
 
 function parseRoomInput(value: string): { roomId: string; queryParams: URLSearchParams } | null {
@@ -95,7 +95,7 @@ export default function Dashboard() {
   };
 
   const goToRoom = (squad?: { id: string; name: string }, preferredRoomId?: string) => {
-    const roomId = preferredRoomId || generateRoomId();
+    const roomId = preferredRoomId || (squad ? resolveSquadRoomId(squad.id) : generateRoomId());
     const params = new URLSearchParams();
     if (squad) {
       params.set("squadId", squad.id);
