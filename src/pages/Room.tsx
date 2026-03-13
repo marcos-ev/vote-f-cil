@@ -355,15 +355,13 @@ export default function Room() {
   return (
     <div className="min-h-screen pb-8">
       <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-10">
-        <div
-          className={`${sidebarCollapsed ? "md:pl-20" : "md:pl-72"} max-w-5xl mx-auto px-4 py-3 space-y-2 transition-all`}
-        >
+        <div className="max-w-5xl mx-auto px-4 py-3 space-y-2">
           <div className="flex items-center gap-2">
             <Button
               variant="ghost"
               size="sm"
               onClick={() => navigate("/")}
-              className="h-8 w-8 p-0 sm:h-9 sm:w-auto sm:px-3 gap-1 text-xs flex-shrink-0"
+              className="h-8 w-8 p-0 sm:h-9 sm:w-auto sm:px-3 gap-1 text-xs flex-shrink-0 md:ml-3"
             >
               <ArrowLeft className="w-4 h-4" />
               <span className="hidden sm:inline">Voltar</span>
