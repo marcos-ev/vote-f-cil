@@ -375,13 +375,20 @@ export async function apiUpsertPresence(
       }
     }
 
+    const nextVote = input.vote === undefined ? previous?.vote ?? null : input.vote;
+    const nextHasVoted = input.hasVoted === undefined ? Boolean(previous?.hasVoted) : input.hasVoted;
+    const shouldKeepPreviousVote =
+      Boolean(current.isVoting) &&
+      Boolean(previous?.hasVoted) &&
+      !nextHasVoted;
+
     nextParticipants[input.participantId] = {
       id: input.participantId,
       userId: session.user.id,
       name: input.name.trim() || session.user.displayName,
       role: "player",
-      vote: input.vote === undefined ? previous?.vote ?? null : input.vote,
-      hasVoted: input.hasVoted === undefined ? Boolean(previous?.hasVoted) : input.hasVoted,
+      vote: shouldKeepPreviousVote ? previous?.vote ?? null : nextVote,
+      hasVoted: shouldKeepPreviousVote ? true : nextHasVoted,
       lastSeen: now,
     };
 
