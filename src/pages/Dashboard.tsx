@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Copy, Link2, LogOut, PanelLeftClose, PanelLeftOpen, Plus, Trash2, Users } from "lucide-react";
+import { Link2, LogOut, PanelLeftClose, PanelLeftOpen, Plus, Trash2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { DeleteSquadDialog } from "@/components/delete-squad-dialog";
 import { brandAssets } from "@/lib/branding";
-import { apiCreateSquad, apiDeleteSquad, apiJoinSquad, apiListSquadsForSession } from "@/lib/api";
+import { apiCreateSquad, apiDeleteSquad, apiListSquadsForSession, subscribeSquads } from "@/lib/api";
 import { getCurrentFirebaseSession, logoutFirebase } from "@/lib/firebase-auth";
 import { clearAuthSession, getAuthSession } from "@/lib/auth-session";
 import { bindSquadRoom, getLastSquadId, resolveSquadRoomId, setLastSquadId } from "@/lib/squad-room";
@@ -76,11 +76,9 @@ export default function Dashboard() {
   const [authChecked, setAuthChecked] = useState(false);
   const [squads, setSquads] = useState<Squad[]>([]);
   const [newSquadName, setNewSquadName] = useState("");
-  const [inviteCodeInput, setInviteCodeInput] = useState("");
   const [activeSquadId, setActiveSquadId] = useState(getLastSquadId());
   const [roomInput, setRoomInput] = useState("");
   const [creatingSquad, setCreatingSquad] = useState(false);
-  const [joiningInvite, setJoiningInvite] = useState(false);
   const [loadingSquads, setLoadingSquads] = useState(true);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [deletingSquadId, setDeletingSquadId] = useState("");
@@ -97,36 +95,13 @@ export default function Dashboard() {
 
   const goToRoom = (squad?: { id: string; name: string }, preferredRoomId?: string) => {
     const roomId = preferredRoomId || generateRoomId();
-    const params = new URLSearchParams({
-      mod: "1",
-      name: name.trim(),
-    });
+    const params = new URLSearchParams();
     if (squad) {
       params.set("squadId", squad.id);
       params.set("squadName", squad.name);
       bindSquadRoom(squad.id, roomId);
     }
     navigate(`/sala/${roomId}?${params.toString()}`);
-  };
-
-  const fetchSquads = async () => {
-    try {
-      setLoadingSquads(true);
-      const result = await apiListSquadsForSession(sessionId);
-      debugLog("H2", "dashboard_fetch_squads_ok", {
-        squadsCount: result.squads.length,
-        hasActiveSquad: Boolean(activeSquadId),
-      });
-      setSquads(result.squads);
-    } catch (error) {
-      debugLog("H2", "dashboard_fetch_squads_failed", {
-        error: error instanceof Error ? error.message : "unknown",
-      });
-      console.error(error);
-      toast.error("Falha ao carregar squads. Tente novamente.");
-    } finally {
-      setLoadingSquads(false);
-    }
   };
 
   useEffect(() => {
@@ -152,8 +127,12 @@ export default function Dashboard() {
           userId: me.user.id,
           username: me.user.username,
         });
-        setName(me.user.displayName);
-        localStorage.setItem(LAST_NAME_KEY, me.user.displayName);
+        const savedName = (localStorage.getItem(LAST_NAME_KEY) || "").trim();
+        const preferredName = savedName || me.user.displayName;
+        setName(preferredName);
+        if (!savedName) {
+          localStorage.setItem(LAST_NAME_KEY, me.user.displayName);
+        }
       } catch {
         debugLog("H1", "dashboard_auth_bootstrap_me_failed", {});
         clearAuthSession();
@@ -167,8 +146,36 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!authChecked) return;
-    void fetchSquads();
-  }, [authChecked, sessionId]);
+    let unsubscribe: (() => void) | null = null;
+    let active = true;
+    setLoadingSquads(true);
+    void subscribeSquads(
+      (nextSquads) => {
+        if (!active) return;
+        debugLog("H2", "dashboard_squads_realtime_update", {
+          squadsCount: nextSquads.length,
+          hasActiveSquad: Boolean(activeSquadId && nextSquads.some((squad) => squad.id === activeSquadId)),
+        });
+        setSquads(nextSquads);
+        setLoadingSquads(false);
+      },
+      () => {
+        if (!active) return;
+        toast.error("Falha ao sincronizar squads em tempo real.");
+        setLoadingSquads(false);
+      },
+    ).then((unsub) => {
+      if (!active) {
+        unsub();
+        return;
+      }
+      unsubscribe = unsub;
+    });
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, [activeSquadId, authChecked, sessionId]);
 
   const logout = async () => {
     await logoutFirebase();
@@ -210,7 +217,6 @@ export default function Dashboard() {
       setActiveSquadId(squad.id);
       localStorage.setItem(LAST_NAME_KEY, name.trim());
       setLastSquadId(squad.id);
-      await fetchSquads();
       goToRoom({ id: squad.id, name: squad.name });
     } catch (error) {
       debugLog("H2", "dashboard_create_squad_failed", {
@@ -223,40 +229,6 @@ export default function Dashboard() {
     }
   };
 
-  const joinSquadByInvite = async () => {
-    if (!canStart) {
-      toast.error("Digite seu nome primeiro");
-      return;
-    }
-    if (!inviteCodeInput.trim()) {
-      toast.error("Digite o código de convite");
-      return;
-    }
-
-    setJoiningInvite(true);
-    try {
-      const result = await apiJoinSquad({
-        inviteCode: inviteCodeInput.trim().toUpperCase(),
-        userName: name.trim(),
-      });
-      const squad = result.squad;
-      setInviteCodeInput("");
-      setActiveSquadId(squad.id);
-      localStorage.setItem(LAST_NAME_KEY, name.trim());
-      setLastSquadId(squad.id);
-      await fetchSquads();
-      const roomId = resolveSquadRoomId(squad.id);
-      toast.success(`Você entrou na squad ${squad.name}. Abrindo sala...`);
-      goToRoom({ id: squad.id, name: squad.name }, roomId);
-    } catch (error: any) {
-      console.error(error);
-      const message = String(error?.message || "");
-      toast.error(message.includes("convite inválido") ? "Convite inválido" : "Não foi possível entrar na squad.");
-    } finally {
-      setJoiningInvite(false);
-    }
-  };
-
   const deleteSquad = async (squad: Squad) => {
     setDeletingSquadId(squad.id);
     try {
@@ -264,7 +236,6 @@ export default function Dashboard() {
       if (activeSquadId === squad.id) {
         setActiveSquadId("");
       }
-      await fetchSquads();
       toast.success(`Squad "${squad.name}" apagada.`);
     } catch (error: any) {
       toast.error(getApiErrorMessage(error, "Falha ao apagar squad."));
@@ -309,7 +280,8 @@ export default function Dashboard() {
     }
     persistIdentity();
     const params = new URLSearchParams(parsedInput.queryParams);
-    params.set("name", name.trim());
+    params.delete("name");
+    params.delete("mod");
     if (activeSquad) {
       params.set("squadId", activeSquad.id);
       params.set("squadName", activeSquad.name);
@@ -414,20 +386,6 @@ export default function Dashboard() {
                     ))}
                   </div>
                 )}
-                {activeSquad && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="w-full mt-2 gap-1.5"
-                    onClick={() => {
-                      navigator.clipboard.writeText(activeSquad.invite_code);
-                      toast.success("Convite copiado");
-                    }}
-                  >
-                    <Copy className="w-3.5 h-3.5" />
-                    Copiar convite
-                  </Button>
-                )}
               </div>
             )}
       </aside>
@@ -445,11 +403,13 @@ export default function Dashboard() {
               <label className="text-sm font-medium mb-1.5 block">Seu nome</label>
               <Input
                 value={name}
-                readOnly
+                onChange={(e) => setName(e.target.value)}
                 placeholder="Ex: Marco"
                 className="bg-secondary border-border"
               />
-              <p className="text-xs text-muted-foreground mt-1">Nome vinculado ao usuário logado.</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Sugestão inicial vem da conta, mas você pode editar para esta sessão.
+              </p>
             </div>
           </div>
 
@@ -470,11 +430,9 @@ export default function Dashboard() {
 
         <section className="bg-card rounded-xl border border-border p-4 sm:p-6 space-y-4">
           <h2 className="text-sm font-medium">Gerenciar squads</h2>
-          <p className="text-xs text-muted-foreground">
-            Crie uma squad nova ou entre por convite. Ao concluir, você entra direto na sala da squad.
-          </p>
+          <p className="text-xs text-muted-foreground">Crie uma squad nova. Ao concluir, você entra direto na sala da squad.</p>
 
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-3 md:grid-cols-1">
             <div className="space-y-2">
               <label className="text-xs text-muted-foreground">Criar squad</label>
               <div className="flex flex-col sm:flex-row gap-2">
@@ -487,21 +445,6 @@ export default function Dashboard() {
                 <Button onClick={createSquad} disabled={creatingSquad} className="w-full sm:w-auto gap-1.5">
                   <Plus className="w-4 h-4" />
                   {creatingSquad ? "Criando..." : "Criar"}
-                </Button>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-xs text-muted-foreground">Entrar por convite</label>
-              <div className="flex flex-col sm:flex-row gap-2">
-                <Input
-                  value={inviteCodeInput}
-                  onChange={(e) => setInviteCodeInput(e.target.value.toUpperCase())}
-                  placeholder="Código da squad (ex: AB12CD)"
-                  className="bg-secondary border-border"
-                />
-                <Button variant="outline" onClick={joinSquadByInvite} disabled={joiningInvite} className="w-full sm:w-auto">
-                  {joiningInvite ? "Entrando..." : "Entrar"}
                 </Button>
               </div>
             </div>

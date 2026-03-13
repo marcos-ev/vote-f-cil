@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { brandAssets } from "@/lib/branding";
-import { loginWithFirebase, registerWithFirebase } from "@/lib/firebase-auth";
+import { loginWithFirebase, loginWithGoogle, registerWithFirebase } from "@/lib/firebase-auth";
 import { getOrCreateSessionId } from "@/lib/session";
 
 function getErrorMessage(error: unknown, fallback: string) {
@@ -43,6 +43,22 @@ export default function Auth() {
       navigate("/");
     } catch (error) {
       toast.error(getErrorMessage(error, mode === "register" ? "Falha no cadastro" : "Falha no login"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const submitGoogle = async () => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      const result = await loginWithGoogle();
+      localStorage.setItem("poker-display-name", result.user.displayName);
+      getOrCreateSessionId();
+      toast.success("Login com Google efetuado!");
+      navigate("/");
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Falha no login com Google"));
     } finally {
       setLoading(false);
     }
@@ -114,6 +130,12 @@ export default function Auth() {
           <Button onClick={submit} disabled={!canSubmit} className="w-full font-semibold">
             {loading ? "Processando..." : mode === "register" ? "Criar conta" : "Entrar"}
           </Button>
+
+          {mode === "login" && (
+            <Button variant="outline" onClick={submitGoogle} disabled={loading} className="w-full">
+              Entrar com Google
+            </Button>
+          )}
 
           <Button
             variant="ghost"

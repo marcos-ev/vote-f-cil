@@ -52,17 +52,21 @@ const emptyRoomState = (roomId: string): RoomState => ({
   updatedAt: Date.now(),
 });
 
-export function useRoom(roomId: string, userName: string, isModerator: boolean) {
-  const myId = useRef(localStorage.getItem(`poker-user-id-${roomId}`) || generateId());
+export function useRoom(roomId: string, userName: string, enabled = true, squadId?: string | null) {
+  const myId = useRef(generateId());
   const [connected, setConnected] = useState(false);
   const [roomState, setRoomState] = useState<RoomState>(() => emptyRoomState(roomId));
 
   useEffect(() => {
-    localStorage.setItem(`poker-user-id-${roomId}`, myId.current);
+    if (!roomId) return;
+    const storageKey = `poker-user-id-${roomId}`;
+    const stored = localStorage.getItem(storageKey);
+    myId.current = stored || generateId();
+    localStorage.setItem(storageKey, myId.current);
   }, [roomId]);
 
   const refreshRoom = useCallback(async () => {
-    if (!roomId) return;
+    if (!enabled || !roomId) return;
     const { room } = await apiGetRoom(roomId);
     debugLog("H3", "use_room_refresh_ok", {
       roomId,
@@ -70,7 +74,7 @@ export function useRoom(roomId: string, userName: string, isModerator: boolean) 
       participantsCount: Object.keys(room.participants).length,
     });
     setRoomState(room);
-  }, [roomId]);
+  }, [enabled, roomId]);
 
   const upsertPresence = useCallback(
     async (vote: string | null, hasVoted: boolean) => {
@@ -78,25 +82,32 @@ export function useRoom(roomId: string, userName: string, isModerator: boolean) 
       debugLog("H3", "use_room_upsert_presence_start", {
         roomId,
         hasUserName: Boolean(userName),
-        isModerator,
         hasVoted,
         voteProvided: vote !== null,
       });
       await apiUpsertPresence(roomId, {
         participantId: myId.current,
         name: userName,
-        role: isModerator ? "moderator" : "player",
+        role: "player",
         vote,
         hasVoted,
+        squadId: squadId || undefined,
       });
     },
-    [isModerator, roomId, userName],
+    [roomId, squadId, userName],
   );
 
   const runRoomAction = useCallback(
     async (
-      action: "start_vote" | "reveal_votes" | "new_round" | "new_story" | "confirm_estimate" | "reset_room",
-      payload?: { storyName?: string; finalEstimate?: string },
+      action:
+        | "start_vote"
+        | "reveal_votes"
+        | "new_round"
+        | "new_story"
+        | "confirm_estimate"
+        | "reset_room"
+        | "transfer_moderator",
+      payload?: { storyName?: string; finalEstimate?: string; targetParticipantId?: string },
     ) => {
       if (!roomId) return;
       debugLog("H3", "use_room_action_start", {
@@ -110,7 +121,7 @@ export function useRoom(roomId: string, userName: string, isModerator: boolean) 
   );
 
   useEffect(() => {
-    if (!roomId) return;
+    if (!enabled || !roomId) return;
     let unsubscribe: (() => void) | null = null;
     let active = true;
     setConnected(false);
@@ -138,15 +149,21 @@ export function useRoom(roomId: string, userName: string, isModerator: boolean) 
       setConnected(false);
       unsubscribe?.();
     };
-  }, [refreshRoom, roomId]);
+  }, [enabled, refreshRoom, roomId]);
 
   useEffect(() => {
-    if (!roomId || !userName) return;
-    void upsertPresence(null, false).catch(() => undefined);
+    if (!enabled || !roomId || !userName) return;
+    void upsertPresence(null, false).catch((error) => {
+      toast.error(`Falha ao entrar na sala. ${getErrorMessage(error, "Tente novamente.")}`);
+    });
+    const heartbeat = setInterval(() => {
+      void upsertPresence(null, false).catch(() => undefined);
+    }, 10000);
     return () => {
+      clearInterval(heartbeat);
       void apiLeaveRoom(roomId, myId.current).catch(() => undefined);
     };
-  }, [roomId, upsertPresence, userName]);
+  }, [enabled, roomId, upsertPresence, userName]);
 
   const castVote = useCallback(
     (value: string) => {
@@ -199,7 +216,18 @@ export function useRoom(roomId: string, userName: string, isModerator: boolean) 
     });
   }, [runRoomAction]);
 
+  const transferModerator = useCallback(
+    (targetParticipantId: string) => {
+      if (!targetParticipantId) return;
+      void runRoomAction("transfer_moderator", { targetParticipantId }).catch((error) => {
+        toast.error(`Falha ao transferir moderação. ${getErrorMessage(error, "Tente novamente.")}`);
+      });
+    },
+    [runRoomAction],
+  );
+
   const myVote = roomState.participants[myId.current]?.vote ?? null;
+  const isModerator = roomState.participants[myId.current]?.role === "moderator";
 
   return {
     participants: roomState.participants,
@@ -210,6 +238,7 @@ export function useRoom(roomId: string, userName: string, isModerator: boolean) 
     connected,
     myId: myId.current,
     myVote,
+    isModerator,
     castVote,
     startVote,
     revealVotes,
@@ -217,5 +246,6 @@ export function useRoom(roomId: string, userName: string, isModerator: boolean) 
     newStory,
     confirmEstimate,
     resetRoom,
+    transferModerator,
   };
 }

@@ -1,7 +1,9 @@
 import {
   createUserWithEmailAndPassword,
+  GoogleAuthProvider,
   onAuthStateChanged,
   signInWithEmailAndPassword,
+  signInWithPopup,
   signOut,
   updateProfile,
   type User,
@@ -90,6 +92,23 @@ export async function loginWithFirebase(input: { username: string; password: str
     return session;
   } catch (error) {
     throw new Error(mapFirebaseAuthError(error, "Falha no login."));
+  }
+}
+
+export async function loginWithGoogle() {
+  try {
+    const provider = new GoogleAuthProvider();
+    const credential = await signInWithPopup(firebaseAuth, provider);
+    const user = credential.user;
+    const username = usernameFromEmail(user.email) || user.uid;
+    if (!user.displayName?.trim()) {
+      await updateProfile(user, { displayName: username });
+    }
+    const session = await toSession(user, username);
+    setAuthSession(session);
+    return session;
+  } catch (error) {
+    throw new Error(mapFirebaseAuthError(error, "Falha ao entrar com Google."));
   }
 }
 
