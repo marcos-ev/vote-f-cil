@@ -333,8 +333,8 @@ export async function apiUpsertPresence(
     participantId: string;
     name: string;
     role: Role;
-    vote: string | null;
-    hasVoted: boolean;
+    vote?: string | null;
+    hasVoted?: boolean;
     squadId?: string;
   },
 ) {
@@ -346,6 +346,7 @@ export async function apiUpsertPresence(
     const current = snap.exists() ? asRoomData(snap.data()) : { ...DEFAULT_ROOM, updatedAt: Date.now() };
     const nextParticipants = { ...(current.participants || {}) };
     const now = Date.now();
+    const previous = nextParticipants[input.participantId];
     const incomingSquadId = String(input.squadId || "").trim() || null;
     const effectiveSquadId = current.squadId || incomingSquadId;
     let squadAccess: SquadAccess | null = null;
@@ -379,8 +380,8 @@ export async function apiUpsertPresence(
       userId: session.user.id,
       name: input.name.trim() || session.user.displayName,
       role: "player",
-      vote: input.vote,
-      hasVoted: input.hasVoted,
+      vote: input.vote === undefined ? previous?.vote ?? null : input.vote,
+      hasVoted: input.hasVoted === undefined ? Boolean(previous?.hasVoted) : input.hasVoted,
       lastSeen: now,
     };
 

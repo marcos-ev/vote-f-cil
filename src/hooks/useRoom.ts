@@ -77,13 +77,13 @@ export function useRoom(roomId: string, userName: string, enabled = true, squadI
   }, [enabled, roomId]);
 
   const upsertPresence = useCallback(
-    async (vote: string | null, hasVoted: boolean) => {
+    async (vote?: string | null, hasVoted?: boolean) => {
       if (!roomId || !userName) return;
       debugLog("H3", "use_room_upsert_presence_start", {
         roomId,
         hasUserName: Boolean(userName),
         hasVoted,
-        voteProvided: vote !== null,
+        voteProvided: vote !== undefined,
       });
       await apiUpsertPresence(roomId, {
         participantId: myId.current,
@@ -153,11 +153,11 @@ export function useRoom(roomId: string, userName: string, enabled = true, squadI
 
   useEffect(() => {
     if (!enabled || !roomId || !userName) return;
-    void upsertPresence(null, false).catch((error) => {
+    void upsertPresence(undefined, undefined).catch((error) => {
       toast.error(`Falha ao entrar na sala. ${getErrorMessage(error, "Tente novamente.")}`);
     });
     const heartbeat = setInterval(() => {
-      void upsertPresence(null, false).catch(() => undefined);
+      void upsertPresence(undefined, undefined).catch(() => undefined);
     }, 10000);
     return () => {
       clearInterval(heartbeat);
