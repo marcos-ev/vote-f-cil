@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Link2, LogOut, PanelLeftClose, PanelLeftOpen, Plus, Trash2, Users } from "lucide-react";
+import { Link2, PanelLeftClose, PanelLeftOpen, Plus, Trash2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { DeleteSquadDialog } from "@/components/delete-squad-dialog";
+import { AccountMenu } from "@/components/account-menu";
 import { brandAssets } from "@/lib/branding";
 import { apiCreateSquad, apiDeleteSquad, apiListSquadsForSession, subscribeSquads } from "@/lib/api";
 import { getCurrentFirebaseSession, logoutFirebase } from "@/lib/firebase-auth";
@@ -237,7 +238,7 @@ export default function Dashboard() {
         setActiveSquadId("");
       }
       toast.success(`Squad "${squad.name}" apagada.`);
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast.error(getApiErrorMessage(error, "Falha ao apagar squad."));
     } finally {
       setDeletingSquadId("");
@@ -305,10 +306,11 @@ export default function Dashboard() {
           <div className="absolute right-4">
             <div className="flex items-center gap-2">
               <ThemeToggle />
-              <Button variant="outline" size="sm" onClick={logout} className="gap-1.5">
-                <LogOut className="w-3.5 h-3.5" />
-                Sair
-              </Button>
+              <AccountMenu
+                squads={squads.map((squad) => ({ id: squad.id, name: squad.name }))}
+                onLogout={logout}
+                onDisplayNameUpdated={(nextName) => setName(nextName)}
+              />
             </div>
           </div>
         </div>

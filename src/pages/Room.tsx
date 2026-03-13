@@ -23,11 +23,12 @@ import { VoteStats } from "@/components/VoteStats";
 import { SessionHistory } from "@/components/SessionHistory";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { DeleteSquadDialog } from "@/components/delete-squad-dialog";
+import { AccountMenu } from "@/components/account-menu";
 import { brandAssets } from "@/lib/branding";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { apiDeleteSquad, subscribeSquads } from "@/lib/api";
-import { getCurrentFirebaseSession } from "@/lib/firebase-auth";
+import { getCurrentFirebaseSession, logoutFirebase } from "@/lib/firebase-auth";
 import { clearAuthSession, getAuthSession } from "@/lib/auth-session";
 import { bindSquadRoom, resolveSquadRoomId, setLastSquadId } from "@/lib/squad-room";
 import { getOrCreateSessionId } from "@/lib/session";
@@ -302,6 +303,11 @@ export default function Room() {
     setEntered(true);
   };
 
+  const logout = async () => {
+    await logoutFirebase();
+    navigate("/login");
+  };
+
   if (!authChecked) {
     return (
       <div className="min-h-screen flex items-center justify-center text-sm text-muted-foreground">
@@ -374,6 +380,11 @@ export default function Room() {
                 {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                 {copied ? "Copiado!" : "Copiar Link"}
               </Button>
+              <AccountMenu
+                squads={squads.map((squad) => ({ id: squad.id, name: squad.name }))}
+                onLogout={logout}
+                onDisplayNameUpdated={(nextName) => setUserName(nextName)}
+              />
             </div>
           </div>
           <div className="flex items-center gap-2">

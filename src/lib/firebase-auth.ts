@@ -38,6 +38,7 @@ async function toSession(user: User, forcedUsername?: string): Promise<AuthSessi
       id: user.uid,
       username,
       displayName,
+      photoURL: user.photoURL || undefined,
     },
   };
 }
@@ -134,4 +135,19 @@ export async function logoutFirebase() {
     // Limpa sessão local mesmo em caso de erro remoto.
   });
   clearAuthSession();
+}
+
+export async function updateFirebaseDisplayName(nextDisplayName: string) {
+  const displayName = nextDisplayName.trim();
+  if (displayName.length < 2) {
+    throw new Error("Informe um nome com pelo menos 2 caracteres.");
+  }
+  const user = firebaseAuth.currentUser || (await waitForFirebaseAuthReady());
+  if (!user) {
+    throw new Error("Sessão expirada. Faça login novamente.");
+  }
+  await updateProfile(user, { displayName });
+  const session = await toSession(user);
+  setAuthSession(session);
+  return session;
 }
