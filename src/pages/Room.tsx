@@ -355,7 +355,9 @@ export default function Room() {
   return (
     <div className="min-h-screen pb-8">
       <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-10">
-        <div className="max-w-5xl mx-auto px-4 py-3 space-y-2">
+        <div
+          className={`${sidebarCollapsed ? "md:pl-20" : "md:pl-72"} max-w-5xl mx-auto px-4 py-3 space-y-2 transition-all`}
+        >
           <div className="flex items-center gap-2">
             <Button
               variant="ghost"
