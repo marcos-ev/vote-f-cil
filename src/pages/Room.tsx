@@ -89,6 +89,7 @@ export default function Room() {
   const [storyInput, setStoryInput] = useState("");
   const [copied, setCopied] = useState(false);
   const [squads, setSquads] = useState<Squad[]>([]);
+  const [squadsSynced, setSquadsSynced] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [deletingSquadId, setDeletingSquadId] = useState("");
   const [squadToDelete, setSquadToDelete] = useState<Squad | null>(null);
@@ -208,6 +209,7 @@ export default function Room() {
     if (!authChecked) return;
     let unsubscribe: (() => void) | null = null;
     let active = true;
+    setSquadsSynced(false);
     void subscribeSquads(
       (nextSquads) => {
         if (!active) return;
@@ -217,10 +219,12 @@ export default function Room() {
           squadsCount: nextSquads.length,
         });
         setSquads(nextSquads);
+        setSquadsSynced(true);
       },
       () => {
         if (!active) return;
         debugLog("H4", "room_squads_realtime_failed", { roomId, squadId });
+        setSquadsSynced(true);
       },
     ).then((unsub) => {
       if (!active) {
@@ -236,13 +240,13 @@ export default function Room() {
   }, [authChecked, roomId, squadId]);
 
   useEffect(() => {
-    if (!authChecked || !squadId) return;
+    if (!authChecked || !squadId || !squadsSynced) return;
     const squadStillExists = squads.some((squad) => squad.id === squadId);
     if (!squadStillExists) {
       toast.error("Esta squad foi removida. Voltando para a página inicial.");
       navigate("/");
     }
-  }, [authChecked, navigate, squadId, squads]);
+  }, [authChecked, navigate, squadId, squads, squadsSynced]);
 
   useEffect(() => {
     if (!canTransferResponsibility) {
