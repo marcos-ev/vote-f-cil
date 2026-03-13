@@ -466,16 +466,8 @@ export async function apiRoomAction(
       };
     }
     const isCurrentResponsible = Boolean(current.controllerUserId && session.user.id === current.controllerUserId);
-    const isSquadOwner = Boolean(squadAccess && session.user.id === squadAccess.ownerUserId);
 
-    if (input.action === "transfer_moderator") {
-      if (squadAccess && !isSquadOwner) {
-        throw new Error("Somente o owner da squad pode transferir a responsabilidade.");
-      }
-      if (!squadAccess && !isCurrentResponsible) {
-        throw new Error("Somente o responsável atual pode transferir a responsabilidade.");
-      }
-    } else if (!isCurrentResponsible) {
+    if (!isCurrentResponsible) {
       throw new Error("Somente o responsável atual da votação pode executar esta ação.");
     }
     const clearVotes = () => {

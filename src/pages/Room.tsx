@@ -122,9 +122,7 @@ export default function Room() {
   } = useRoom(roomId, authChecked && entered ? userName.trim() : "", authChecked, squadId);
 
   const participantList = Object.values(participants);
-  const currentSquad = useMemo(() => squads.find((item) => item.id === squadId), [squadId, squads]);
-  const isSquadOwner = Boolean(authSession?.user.id && currentSquad?.ownerUserId === authSession.user.id);
-  const canTransferResponsibility = squadId ? isSquadOwner : isModerator;
+  const canTransferResponsibility = isModerator;
   const transferCandidates = useMemo(
     () => participantList.filter((participant) => participant.role !== "moderator"),
     [participantList],
