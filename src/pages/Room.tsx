@@ -38,6 +38,7 @@ type Squad = {
   id: string;
   name: string;
   invite_code: string;
+  ownerUserId?: string;
   canDelete?: boolean;
 };
 
@@ -122,7 +123,7 @@ export default function Room() {
 
   const participantList = Object.values(participants);
   const currentSquad = useMemo(() => squads.find((item) => item.id === squadId), [squadId, squads]);
-  const isSquadOwner = Boolean(currentSquad?.canDelete);
+  const isSquadOwner = Boolean(authSession?.user.id && currentSquad?.ownerUserId === authSession.user.id);
   const canTransferResponsibility = squadId ? isSquadOwner : isModerator;
   const transferCandidates = useMemo(
     () => participantList.filter((participant) => participant.role !== "moderator"),

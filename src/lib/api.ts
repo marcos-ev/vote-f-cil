@@ -174,6 +174,7 @@ function mapSquadsFromDocs(docs: Array<{ id: string; data: () => unknown }>, cur
       id: item.id,
       name: item.name,
       invite_code: item.invite_code,
+      ownerUserId: item.ownerUserId,
       canDelete: item.ownerUserId === currentUserId,
     }));
 }
@@ -269,6 +270,7 @@ export async function apiCreateSquad(input: { name: string; createdByName: strin
       id: squadId,
       name: squadName,
       invite_code: inviteCode,
+      ownerUserId: session.user.id,
       canDelete: true,
     },
   };
@@ -294,6 +296,7 @@ export async function apiJoinSquad(input: { inviteCode: string; userName: string
       id: squad.id,
       name: squad.name,
       invite_code: squad.invite_code,
+      ownerUserId: squad.ownerUserId,
       canDelete: squad.ownerUserId === session.user.id,
     },
   };

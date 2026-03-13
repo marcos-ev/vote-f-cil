@@ -50,6 +50,7 @@ export interface Squad {
   id: string;
   name: string;
   invite_code: string;
+  ownerUserId?: string;
   canDelete?: boolean;
 }
 
