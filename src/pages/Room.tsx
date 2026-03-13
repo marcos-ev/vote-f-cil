@@ -26,14 +26,19 @@ import { DeleteSquadDialog } from "@/components/delete-squad-dialog";
 import { brandAssets } from "@/lib/branding";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { apiDeleteSquad, apiListSquadsForSession } from "@/lib/api";
+import { apiDeleteSquad, subscribeSquads } from "@/lib/api";
 import { getCurrentFirebaseSession } from "@/lib/firebase-auth";
 import { clearAuthSession, getAuthSession } from "@/lib/auth-session";
 import { bindSquadRoom, resolveSquadRoomId, setLastSquadId } from "@/lib/squad-room";
 import { getOrCreateSessionId } from "@/lib/session";
 
 const NAME_KEY = "poker-display-name";
-type Squad = Awaited<ReturnType<typeof apiListSquadsForSession>>["squads"][number];
+type Squad = {
+  id: string;
+  name: string;
+  invite_code: string;
+  canDelete?: boolean;
+};
 
 function getApiErrorMessage(error: unknown, fallback: string) {
   const raw = error instanceof Error ? String(error.message || "").trim() : "";
@@ -64,7 +69,7 @@ function debugLog(hypothesisId: string, message: string, data: Record<string, un
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "df5e7d" },
     body: JSON.stringify(payload),
-  }).catch(() => {});
+  }).catch(() => { });
   // #endregion
 }
 
@@ -72,13 +77,12 @@ export default function Room() {
   const { roomId = "" } = useParams<{ roomId: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const isMod = searchParams.get("mod") === "1";
   const squadName = searchParams.get("squadName") || searchParams.get("team") || "";
   const squadId = searchParams.get("squadId");
   const authSession = useMemo(() => getAuthSession(), []);
   const initialName = useMemo(
-    () => searchParams.get("name") || authSession?.user.displayName || localStorage.getItem(NAME_KEY) || "",
-    [authSession, searchParams],
+    () => localStorage.getItem(NAME_KEY) || authSession?.user.displayName || "",
+    [authSession],
   );
   const [userName, setUserName] = useState(initialName);
   const [entered, setEntered] = useState(initialName.trim().length >= 2);
@@ -89,6 +93,7 @@ export default function Room() {
   const [deletingSquadId, setDeletingSquadId] = useState("");
   const [squadToDelete, setSquadToDelete] = useState<Squad | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
+  const [transferTargetId, setTransferTargetId] = useState("");
   const renderCountRef = useRef(0);
   renderCountRef.current += 1;
 
@@ -99,7 +104,9 @@ export default function Room() {
     isRevealed,
     history,
     connected,
+    myId,
     myVote,
+    isModerator,
     castVote,
     startVote,
     revealVotes,
@@ -107,9 +114,17 @@ export default function Room() {
     newStory,
     confirmEstimate,
     resetRoom,
-  } = useRoom(roomId, authChecked && entered ? userName.trim() : "", isMod);
+    transferModerator,
+  } = useRoom(roomId, authChecked && entered ? userName.trim() : "", authChecked, squadId);
 
   const participantList = Object.values(participants);
+  const currentSquad = useMemo(() => squads.find((item) => item.id === squadId), [squadId, squads]);
+  const isSquadOwner = Boolean(currentSquad?.canDelete);
+  const canTransferResponsibility = squadId ? isSquadOwner : isModerator;
+  const transferCandidates = useMemo(
+    () => participantList.filter((participant) => participant.role !== "moderator" && participant.id !== myId),
+    [myId, participantList],
+  );
 
   const numericVotes = useMemo(() => {
     return Object.values(participants)
@@ -127,7 +142,6 @@ export default function Room() {
     );
   }, [numericVotes]);
 
-  const activeSquad = squads.find((s) => s.id === squadId);
   const sessionId = useMemo(() => getOrCreateSessionId(), []);
 
   useEffect(() => {
@@ -174,21 +188,6 @@ export default function Room() {
     })();
   }, [authSession, initialName, navigate, roomId]);
 
-  const loadSquads = async () => {
-    try {
-      const result = await apiListSquadsForSession(sessionId);
-      debugLog("H4", "room_load_squads_ok", {
-        roomId,
-        squadId,
-        squadsCount: result.squads.length,
-      });
-      setSquads(result.squads);
-    } catch {
-      debugLog("H4", "room_load_squads_failed", { roomId, squadId });
-      // Falha de squads não deve bloquear sala.
-    }
-  };
-
   const goToSquadRoom = (nextSquad: Squad) => {
     const targetRoom = resolveSquadRoomId(nextSquad.id);
     debugLog("H4", "room_go_to_squad_room", {
@@ -199,31 +198,76 @@ export default function Room() {
     bindSquadRoom(nextSquad.id, targetRoom);
     setLastSquadId(nextSquad.id);
     const params = new URLSearchParams({
-      name: userName.trim(),
       squadId: nextSquad.id,
       squadName: nextSquad.name,
     });
-    if (isMod) params.set("mod", "1");
     navigate(`/sala/${targetRoom}?${params.toString()}`);
   };
 
   useEffect(() => {
     if (!authChecked) return;
-    void loadSquads();
-  }, [authChecked, sessionId]);
+    let unsubscribe: (() => void) | null = null;
+    let active = true;
+    void subscribeSquads(
+      (nextSquads) => {
+        if (!active) return;
+        debugLog("H4", "room_squads_realtime_update", {
+          roomId,
+          squadId,
+          squadsCount: nextSquads.length,
+        });
+        setSquads(nextSquads);
+      },
+      () => {
+        if (!active) return;
+        debugLog("H4", "room_squads_realtime_failed", { roomId, squadId });
+      },
+    ).then((unsub) => {
+      if (!active) {
+        unsub();
+        return;
+      }
+      unsubscribe = unsub;
+    });
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, [authChecked, roomId, squadId]);
+
+  useEffect(() => {
+    if (!authChecked || !squadId) return;
+    const squadStillExists = squads.some((squad) => squad.id === squadId);
+    if (!squadStillExists) {
+      toast.error("Esta squad foi removida. Voltando para a página inicial.");
+      navigate("/");
+    }
+  }, [authChecked, navigate, squadId, squads]);
+
+  useEffect(() => {
+    if (!canTransferResponsibility) {
+      setTransferTargetId("");
+      return;
+    }
+    if (transferCandidates.length === 0) {
+      setTransferTargetId("");
+      return;
+    }
+    setTransferTargetId((current) => {
+      if (current && transferCandidates.some((candidate) => candidate.id === current)) return current;
+      return transferCandidates[0].id;
+    });
+  }, [canTransferResponsibility, transferCandidates]);
 
   const deleteSquad = async (squad: Squad) => {
     setDeletingSquadId(squad.id);
     try {
       await apiDeleteSquad(squad.id, sessionId);
-      await loadSquads();
       toast.success(`Squad "${squad.name}" apagada.`);
       if (squadId === squad.id) {
-        const params = new URLSearchParams({ name: userName.trim() });
-        if (isMod) params.set("mod", "1");
-        navigate(`/sala/${roomId}?${params.toString()}`);
+        navigate("/");
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast.error(getApiErrorMessage(error, "Falha ao apagar squad."));
     } finally {
       setDeletingSquadId("");
@@ -337,215 +381,231 @@ export default function Room() {
       </header>
 
       <aside
-        className={`hidden md:block fixed left-0 top-0 h-screen pt-16 bg-card border-r border-border p-3 transition-all z-20 ${
-          sidebarCollapsed ? "w-16" : "w-72"
-        }`}
+        className={`hidden md:block fixed left-0 top-0 h-screen pt-16 bg-card border-r border-border p-3 transition-all z-20 ${sidebarCollapsed ? "w-16" : "w-72"
+          }`}
       >
-            <div className="flex items-center justify-between gap-2">
-              {!sidebarCollapsed && <h3 className="text-sm font-semibold">Squads</h3>}
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 w-8 p-0"
-                onClick={() => setSidebarCollapsed((v) => !v)}
-                aria-label="Alternar sidebar"
-              >
-                {sidebarCollapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
-              </Button>
-            </div>
-            {!sidebarCollapsed && (
-              <div className="mt-3 space-y-2">
-                <p className="text-xs text-muted-foreground">Troque de squad sem sair da sala.</p>
-                {squads.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">Sem squads disponíveis.</p>
-                ) : (
-                  <div className="space-y-1.5 max-h-72 overflow-auto pr-1">
-                    {squads.map((s) => (
-                      <div
-                        key={s.id}
-                        className={`w-full rounded-md border px-2 py-1.5 text-sm transition-colors flex items-center gap-1 ${
-                          s.id === squadId
-                            ? "border-primary bg-primary/10 text-foreground"
-                            : "border-border bg-secondary/30 hover:bg-secondary"
-                        }`}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => goToSquadRoom(s)}
-                          className="flex-1 text-left px-0.5 py-0.5"
-                        >
-                          {s.name}
-                        </button>
-                        {s.canDelete && (
-                          <button
-                            type="button"
-                            title="Apagar squad"
-                            aria-label={`Apagar squad ${s.name}`}
-                            className="p-1 rounded hover:bg-destructive/15 text-destructive disabled:opacity-50"
-                            disabled={deletingSquadId === s.id}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSquadToDelete(s);
-                            }}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {activeSquad && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="w-full mt-2 gap-1.5"
-                    onClick={() => {
-                      navigator.clipboard.writeText(activeSquad.invite_code);
-                      toast.success("Convite copiado");
-                    }}
+        <div className="flex items-center justify-between gap-2">
+          {!sidebarCollapsed && <h3 className="text-sm font-semibold">Squads</h3>}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 w-8 p-0"
+            onClick={() => setSidebarCollapsed((v) => !v)}
+            aria-label="Alternar sidebar"
+          >
+            {sidebarCollapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+          </Button>
+        </div>
+        {!sidebarCollapsed && (
+          <div className="mt-3 space-y-2">
+            <p className="text-xs text-muted-foreground">Troque de squad sem sair da sala.</p>
+            {squads.length === 0 ? (
+              <p className="text-xs text-muted-foreground">Sem squads disponíveis.</p>
+            ) : (
+              <div className="space-y-1.5 max-h-72 overflow-auto pr-1">
+                {squads.map((s) => (
+                  <div
+                    key={s.id}
+                    className={`w-full rounded-md border px-2 py-1.5 text-sm transition-colors flex items-center gap-1 ${s.id === squadId
+                        ? "border-primary bg-primary/10 text-foreground"
+                        : "border-border bg-secondary/30 hover:bg-secondary"
+                      }`}
                   >
-                    <Copy className="w-3.5 h-3.5" />
-                    Copiar convite
-                  </Button>
-                )}
+                    <button
+                      type="button"
+                      onClick={() => goToSquadRoom(s)}
+                      className="flex-1 text-left px-0.5 py-0.5"
+                    >
+                      {s.name}
+                    </button>
+                    {s.canDelete && (
+                      <button
+                        type="button"
+                        title="Apagar squad"
+                        aria-label={`Apagar squad ${s.name}`}
+                        className="p-1 rounded hover:bg-destructive/15 text-destructive disabled:opacity-50"
+                        disabled={deletingSquadId === s.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSquadToDelete(s);
+                        }}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
+          </div>
+        )}
       </aside>
 
       <main className={`${sidebarCollapsed ? "md:pl-20" : "md:pl-72"} px-4 mt-4 sm:mt-6 transition-all`}>
         <div className="max-w-5xl mx-auto space-y-6">
-        <section className="bg-card rounded-xl border border-border p-3 sm:p-4">
-          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground break-words">
-            <span>
-              Sala: <span className="font-mono">{roomId}</span>
-            </span>
-            {squadName && <span>· Squad: {squadName}</span>}
-            <span>· {isMod ? "Perfil: moderador" : "Perfil: participante"}</span>
-            <span>· Conexão: {connected ? "online" : "reconectando..."}</span>
-          </div>
-        </section>
-
-        {isMod && !isVoting && (
-          <div className="bg-card rounded-xl border border-border p-4 sm:p-5">
-            <label className="text-sm font-medium mb-2 block">Nome da história / ticket</label>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <Input
-                value={storyInput}
-                onChange={(e) => setStoryInput(e.target.value)}
-                placeholder="Ex: US-123 - Login com SSO"
-                className="bg-secondary border-border flex-1"
-                onKeyDown={(e) => e.key === "Enter" && storyInput.trim() && (startVote(storyInput.trim()), setStoryInput(""))}
-              />
-              <Button
-                onClick={() => {
-                  startVote(storyInput.trim());
-                  setStoryInput("");
-                }}
-                disabled={!storyInput.trim()}
-                className="w-full sm:w-auto gap-1.5 font-semibold"
-              >
-                <Play className="w-4 h-4" />
-                Iniciar Votação
-              </Button>
+          <section className="bg-card rounded-xl border border-border p-3 sm:p-4">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground break-words">
+              <span>
+                Sala: <span className="font-mono">{roomId}</span>
+              </span>
+              {squadName && <span>· Squad: {squadName}</span>}
+              <span>· {isModerator ? "Perfil: moderador" : "Perfil: participante"}</span>
+              <span>· Conexão: {connected ? "online" : "reconectando..."}</span>
             </div>
-          </div>
-        )}
+          </section>
 
-        {isVoting && (
-          <>
-            <div className="bg-card rounded-xl border border-border p-4 text-center">
-              <p className="text-xs text-muted-foreground mb-1">Votando em</p>
-              <h2 className="text-lg font-bold font-mono">{storyName}</h2>
-            </div>
-
-            {!isRevealed && (
-              <div className="flex flex-wrap justify-center gap-3">
-                {DECK.map((value, i) => (
-                  <VotingCard
-                    key={value}
-                    value={value}
-                    selected={myVote === value}
-                    onClick={() => castVote(value)}
-                    delay={i * 30}
-                  />
-                ))}
-              </div>
-            )}
-
-            <div className="bg-card rounded-xl border border-border p-4">
-              <h3 className="text-sm font-medium mb-3">Participantes</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {participantList.map((p) => (
-                  <ParticipantCard key={p.id} participant={p} isRevealed={isRevealed} />
-                ))}
+          {isModerator && !isVoting && (
+            <div className="bg-card rounded-xl border border-border p-4 sm:p-5">
+              <label className="text-sm font-medium mb-2 block">Nome da história / ticket</label>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <Input
+                  value={storyInput}
+                  onChange={(e) => setStoryInput(e.target.value)}
+                  placeholder="Ex: US-123 - Login com SSO"
+                  className="bg-secondary border-border flex-1"
+                  onKeyDown={(e) => e.key === "Enter" && storyInput.trim() && (startVote(storyInput.trim()), setStoryInput(""))}
+                />
+                <Button
+                  onClick={() => {
+                    startVote(storyInput.trim());
+                    setStoryInput("");
+                  }}
+                  disabled={!storyInput.trim()}
+                  className="w-full sm:w-auto gap-1.5 font-semibold"
+                >
+                  <Play className="w-4 h-4" />
+                  Iniciar Votação
+                </Button>
               </div>
             </div>
-
-            {isRevealed && <VoteStats participants={participants} />}
-
-            {isMod && (
-              <div className="grid gap-2 sm:flex sm:flex-wrap sm:justify-center">
-                {!isRevealed ? (
-                  <Button onClick={revealVotes} className="w-full sm:w-auto gap-1.5 font-semibold">
-                    <Eye className="w-4 h-4" />
-                    Revelar Votos
-                  </Button>
-                ) : (
-                  <>
-                    <Button variant="outline" onClick={newRound} className="w-full sm:w-auto gap-1.5">
-                      <RefreshCw className="w-4 h-4" />
-                      Nova Rodada
-                    </Button>
-                    <Button variant="outline" onClick={newStory} className="w-full sm:w-auto gap-1.5">
-                      <SkipForward className="w-4 h-4" />
-                      Limpar História Atual
-                    </Button>
-                    {suggestedEstimate && (
-                      <Button
-                        onClick={() => confirmEstimate(suggestedEstimate)}
-                        className="w-full sm:w-auto gap-1.5 font-semibold"
-                      >
-                        <CheckCircle2 className="w-4 h-4" />
-                        Confirmar Estimativa ({suggestedEstimate})
-                      </Button>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
-
-            {!isMod && !isRevealed && myVote && (
-              <div className="text-center text-sm text-muted-foreground flex items-center justify-center gap-2">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Aguardando o moderador revelar os votos...
-              </div>
-            )}
-          </>
-        )}
-
-        {!isVoting && !isMod && (
-          <div className="text-center py-16 space-y-3">
-            <Loader2 className="w-8 h-8 animate-spin text-muted-foreground mx-auto" />
-            <p className="text-muted-foreground">Aguardando o moderador iniciar a votação...</p>
-          </div>
-        )}
-
-        <SessionHistory history={history} roomId={roomId} />
-
-        <div className="flex flex-wrap justify-center gap-2">
-          {isMod && history.length > 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={resetRoom}
-              className="text-destructive hover:text-destructive gap-1.5 text-xs"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              Resetar Sala
-            </Button>
           )}
-        </div>
+
+          {isVoting && (
+            <>
+              <div className="bg-card rounded-xl border border-border p-4 text-center">
+                <p className="text-xs text-muted-foreground mb-1">Votando em</p>
+                <h2 className="text-lg font-bold font-mono">{storyName}</h2>
+              </div>
+
+              {!isRevealed && (
+                <div className="flex flex-wrap justify-center gap-3">
+                  {DECK.map((value, i) => (
+                    <VotingCard
+                      key={value}
+                      value={value}
+                      selected={myVote === value}
+                      onClick={() => castVote(value)}
+                      delay={i * 30}
+                    />
+                  ))}
+                </div>
+              )}
+
+              <div className="bg-card rounded-xl border border-border p-4">
+                <h3 className="text-sm font-medium mb-3">Participantes</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {participantList.map((p) => (
+                    <ParticipantCard key={p.id} participant={p} isRevealed={isRevealed} />
+                  ))}
+                </div>
+              </div>
+
+              {isRevealed && <VoteStats participants={participants} />}
+
+              {isModerator && (
+                <div className="grid gap-2 sm:flex sm:flex-wrap sm:justify-center">
+                  {!isRevealed ? (
+                    <Button onClick={revealVotes} className="w-full sm:w-auto gap-1.5 font-semibold">
+                      <Eye className="w-4 h-4" />
+                      Revelar Votos
+                    </Button>
+                  ) : (
+                    <>
+                      <Button variant="outline" onClick={newRound} className="w-full sm:w-auto gap-1.5">
+                        <RefreshCw className="w-4 h-4" />
+                        Nova Rodada
+                      </Button>
+                      <Button variant="outline" onClick={newStory} className="w-full sm:w-auto gap-1.5">
+                        <SkipForward className="w-4 h-4" />
+                        Limpar História Atual
+                      </Button>
+                      {suggestedEstimate && (
+                        <Button
+                          onClick={() => confirmEstimate(suggestedEstimate)}
+                          className="w-full sm:w-auto gap-1.5 font-semibold"
+                        >
+                          <CheckCircle2 className="w-4 h-4" />
+                          Confirmar Estimativa ({suggestedEstimate})
+                        </Button>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+
+              {canTransferResponsibility && transferCandidates.length > 0 && (
+                <div className="bg-card rounded-xl border border-border p-4 sm:p-5 space-y-2">
+                  <h3 className="text-sm font-medium">Transferir responsabilidade</h3>
+                  <p className="text-xs text-muted-foreground">
+                    {squadId
+                      ? "Apenas o owner da squad pode transferir para outro participante."
+                      : "Apenas o responsável atual da sala pode transferir para outro participante."}
+                  </p>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <select
+                      value={transferTargetId}
+                      onChange={(event) => setTransferTargetId(event.target.value)}
+                      className="h-10 rounded-md border border-border bg-secondary px-3 text-sm"
+                    >
+                      {transferCandidates.map((participant) => (
+                        <option key={participant.id} value={participant.id}>
+                          {participant.name}
+                        </option>
+                      ))}
+                    </select>
+                    <Button
+                      variant="outline"
+                      onClick={() => transferModerator(transferTargetId)}
+                      disabled={!transferTargetId}
+                      className="w-full sm:w-auto"
+                    >
+                      Transferir
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {!isModerator && !isRevealed && myVote && (
+                <div className="text-center text-sm text-muted-foreground flex items-center justify-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Aguardando o moderador revelar os votos...
+                </div>
+              )}
+            </>
+          )}
+
+          {!isVoting && !isModerator && (
+            <div className="text-center py-16 space-y-3">
+              <Loader2 className="w-8 h-8 animate-spin text-muted-foreground mx-auto" />
+              <p className="text-muted-foreground">Aguardando o moderador iniciar a votação...</p>
+            </div>
+          )}
+
+          <SessionHistory history={history} roomId={roomId} />
+
+          <div className="flex flex-wrap justify-center gap-2">
+            {isModerator && history.length > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={resetRoom}
+                className="text-destructive hover:text-destructive gap-1.5 text-xs"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Resetar Sala
+              </Button>
+            )}
+          </div>
         </div>
       </main>
       <DeleteSquadDialog

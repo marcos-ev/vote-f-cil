@@ -40,6 +40,9 @@ type FirestoreParticipant = {
 };
 
 type FirestoreRoom = {
+  squadId: string | null;
+  controllerUserId: string | null;
+  controllerParticipantId: string | null;
   storyName: string;
   isVoting: boolean;
   isRevealed: boolean;
@@ -58,7 +61,16 @@ type FirestoreSquad = {
   updatedAt: number;
 };
 
+type SquadAccess = {
+  squadId: string;
+  ownerUserId: string;
+  memberUserIds: string[];
+};
+
 const DEFAULT_ROOM: Omit<FirestoreRoom, "updatedAt"> = {
+  squadId: null,
+  controllerUserId: null,
+  controllerParticipantId: null,
   storyName: "",
   isVoting: false,
   isRevealed: false,
@@ -117,6 +129,9 @@ async function ensureRoom(roomId: string) {
 function asRoomData(data: unknown): FirestoreRoom {
   const value = (data || {}) as Partial<FirestoreRoom>;
   return {
+    squadId: value.squadId ?? null,
+    controllerUserId: value.controllerUserId ?? null,
+    controllerParticipantId: value.controllerParticipantId ?? null,
     storyName: value.storyName || "",
     isVoting: Boolean(value.isVoting),
     isRevealed: Boolean(value.isRevealed),
@@ -151,6 +166,18 @@ function getNumericStats(votes: string[]) {
   };
 }
 
+function mapSquadsFromDocs(docs: Array<{ id: string; data: () => unknown }>, currentUserId: string): Squad[] {
+  return docs
+    .map((item) => ({ ...((item.data() as FirestoreSquad) || {}), id: ((item.data() as FirestoreSquad)?.id || item.id) as string }))
+    .sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0))
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      invite_code: item.invite_code,
+      canDelete: item.ownerUserId === currentUserId,
+    }));
+}
+
 export async function subscribeRoom(roomId: string, onUpdate: (room: RoomState) => void, onError?: () => void): Promise<Unsubscribe> {
   await ensureRoom(roomId);
   return onSnapshot(
@@ -158,6 +185,22 @@ export async function subscribeRoom(roomId: string, onUpdate: (room: RoomState) 
     (snap) => {
       const room = normalizeRoomState(roomId, asRoomData(snap.data()));
       onUpdate(room);
+    },
+    () => {
+      onError?.();
+    },
+  );
+}
+
+export async function subscribeSquads(
+  onUpdate: (squads: Squad[]) => void,
+  onError?: () => void,
+): Promise<Unsubscribe> {
+  const session = await getRequiredSession();
+  return onSnapshot(
+    query(collection(firebaseDb, "squads")),
+    (snap) => {
+      onUpdate(mapSquadsFromDocs(snap.docs, session.user.id));
     },
     () => {
       onError?.();
@@ -184,18 +227,8 @@ export async function apiLogout() {
 
 export async function apiListSquads() {
   const session = await getRequiredSession();
-  const docs = await getDocs(
-    query(collection(firebaseDb, "squads"), where("memberUserIds", "array-contains", session.user.id)),
-  );
-  const squads = docs.docs
-    .map((item) => ({ ...(item.data() as FirestoreSquad), id: (item.data() as FirestoreSquad).id || item.id }))
-    .sort((a, b) => a.createdAt - b.createdAt)
-    .map((item) => ({
-      id: item.id,
-      name: item.name,
-      invite_code: item.invite_code,
-      canDelete: item.ownerUserId === session.user.id,
-    }));
+  const docs = await getDocs(query(collection(firebaseDb, "squads")));
+  const squads = mapSquadsFromDocs(docs.docs, session.user.id);
   return { squads };
 }
 
@@ -302,8 +335,10 @@ export async function apiUpsertPresence(
     role: Role;
     vote: string | null;
     hasVoted: boolean;
+    squadId?: string;
   },
 ) {
+  void input.role;
   const session = await getRequiredSession();
   await runTransaction(firebaseDb, async (tx) => {
     const ref = roomRef(roomId);
@@ -311,19 +346,61 @@ export async function apiUpsertPresence(
     const current = snap.exists() ? asRoomData(snap.data()) : { ...DEFAULT_ROOM, updatedAt: Date.now() };
     const nextParticipants = { ...(current.participants || {}) };
     const now = Date.now();
+    const incomingSquadId = String(input.squadId || "").trim() || null;
+    const effectiveSquadId = current.squadId || incomingSquadId;
+    let squadAccess: SquadAccess | null = null;
+
+    if (effectiveSquadId) {
+      const squadSnap = await tx.get(doc(firebaseDb, "squads", effectiveSquadId));
+      if (!squadSnap.exists()) {
+        throw new Error("Squad da sala não encontrada.");
+      }
+      const squadData = squadSnap.data() as FirestoreSquad;
+      squadAccess = {
+        squadId: effectiveSquadId,
+        ownerUserId: squadData.ownerUserId,
+        memberUserIds: Array.isArray(squadData.memberUserIds) ? squadData.memberUserIds : [],
+      };
+    }
+
+    let controllerUserId = current.controllerUserId;
+    let controllerParticipantId = current.controllerParticipantId;
+
+    if (!controllerUserId) {
+      if (squadAccess) {
+        controllerUserId = squadAccess.ownerUserId || session.user.id;
+      } else {
+        controllerUserId = session.user.id;
+      }
+    }
+
     nextParticipants[input.participantId] = {
       id: input.participantId,
       userId: session.user.id,
       name: input.name.trim() || session.user.displayName,
-      role: input.role,
+      role: "player",
       vote: input.vote,
       hasVoted: input.hasVoted,
       lastSeen: now,
     };
+
+    Object.keys(nextParticipants).forEach((participantId) => {
+      const participant = nextParticipants[participantId];
+      if (participant.userId === controllerUserId) {
+        nextParticipants[participantId] = { ...participant, role: "moderator" };
+        controllerParticipantId = participantId;
+      } else {
+        nextParticipants[participantId] = { ...participant, role: "player" };
+      }
+    });
+
     tx.set(
       ref,
       {
         ...current,
+        squadId: effectiveSquadId,
+        controllerUserId,
+        controllerParticipantId,
         participants: nextParticipants,
         updatedAt: now,
       },
@@ -337,22 +414,59 @@ export async function apiRoomAction(
   roomId: string,
   input: {
     participantId: string;
-    action: "start_vote" | "reveal_votes" | "new_round" | "new_story" | "confirm_estimate" | "reset_room";
+    action:
+      | "start_vote"
+      | "reveal_votes"
+      | "new_round"
+      | "new_story"
+      | "confirm_estimate"
+      | "reset_room"
+      | "transfer_moderator";
     storyName?: string;
     finalEstimate?: string;
+    targetParticipantId?: string;
   },
 ) {
+  const session = await getRequiredSession();
   await runTransaction(firebaseDb, async (tx) => {
     const ref = roomRef(roomId);
     const snap = await tx.get(ref);
     const current = snap.exists() ? asRoomData(snap.data()) : { ...DEFAULT_ROOM, updatedAt: Date.now() };
     const participants = { ...(current.participants || {}) };
     const actor = participants[input.participantId];
-    if (!actor || actor.role !== "moderator") {
-      throw new Error("Apenas moderadores podem executar ações da sala.");
+    if (!actor) {
+      throw new Error("Participante não encontrado na sala.");
+    }
+    if (actor.userId !== session.user.id) {
+      throw new Error("Participante não corresponde à conta logada.");
     }
     const now = Date.now();
+    let squadAccess: SquadAccess | null = null;
+    if (current.squadId) {
+      const squadSnap = await tx.get(doc(firebaseDb, "squads", current.squadId));
+      if (!squadSnap.exists()) {
+        throw new Error("Squad da sala não encontrada.");
+      }
+      const squadData = squadSnap.data() as FirestoreSquad;
+      squadAccess = {
+        squadId: current.squadId,
+        ownerUserId: squadData.ownerUserId,
+        memberUserIds: Array.isArray(squadData.memberUserIds) ? squadData.memberUserIds : [],
+      };
+    }
+    const isCurrentResponsible = Boolean(current.controllerUserId && session.user.id === current.controllerUserId);
+    const isSquadOwner = Boolean(squadAccess && session.user.id === squadAccess.ownerUserId);
 
+    if (input.action === "transfer_moderator") {
+      if (squadAccess && !isSquadOwner) {
+        throw new Error("Somente o owner da squad pode transferir a responsabilidade.");
+      }
+      if (!squadAccess && !isCurrentResponsible) {
+        throw new Error("Somente o responsável atual pode transferir a responsabilidade.");
+      }
+    } else if (!isCurrentResponsible) {
+      throw new Error("Somente o responsável atual da votação pode executar esta ação.");
+    }
     const clearVotes = () => {
       Object.keys(participants).forEach((key) => {
         const p = participants[key];
@@ -469,6 +583,36 @@ export async function apiRoomAction(
         },
         { merge: true },
       );
+      return;
+    }
+
+    if (input.action === "transfer_moderator") {
+      const targetId = String(input.targetParticipantId || "").trim();
+      if (!targetId) throw new Error("Selecione um participante para receber moderação.");
+      if (targetId === input.participantId) throw new Error("Você já é o moderador atual.");
+      const target = participants[targetId];
+      if (!target) throw new Error("Participante alvo não encontrado na sala.");
+      participants[input.participantId] = {
+        ...participants[input.participantId],
+        role: "player",
+        lastSeen: now,
+      };
+      participants[targetId] = {
+        ...participants[targetId],
+        role: "moderator",
+        lastSeen: now,
+      };
+      tx.set(
+        ref,
+        {
+          ...current,
+          controllerUserId: target.userId,
+          controllerParticipantId: targetId,
+          participants,
+          updatedAt: now,
+        },
+        { merge: true },
+      );
     }
   });
   return apiGetRoom(roomId);
@@ -482,7 +626,30 @@ export async function apiLeaveRoom(roomId: string, participantId: string) {
     const current = asRoomData(snap.data());
     const participants = { ...(current.participants || {}) };
     delete participants[participantId];
-    tx.set(ref, { ...current, participants, updatedAt: Date.now() }, { merge: true });
+    let controllerParticipantId = current.controllerParticipantId;
+    if (controllerParticipantId === participantId) {
+      controllerParticipantId = null;
+    }
+    Object.keys(participants).forEach((id) => {
+      const participant = participants[id];
+      participants[id] = {
+        ...participant,
+        role: participant.userId === current.controllerUserId ? "moderator" : "player",
+      };
+      if (participant.userId === current.controllerUserId) {
+        controllerParticipantId = id;
+      }
+    });
+    tx.set(
+      ref,
+      {
+        ...current,
+        participants,
+        controllerParticipantId,
+        updatedAt: Date.now(),
+      },
+      { merge: true },
+    );
   });
   return apiGetRoom(roomId);
 }
