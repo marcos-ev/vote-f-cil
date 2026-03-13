@@ -80,6 +80,7 @@ export default function Room() {
   const navigate = useNavigate();
   const squadName = searchParams.get("squadName") || searchParams.get("team") || "";
   const squadId = searchParams.get("squadId");
+  const canonicalSquadRoomId = useMemo(() => (squadId ? resolveSquadRoomId(squadId) : ""), [squadId]);
   const authSession = useMemo(() => getAuthSession(), []);
   const initialName = useMemo(
     () => localStorage.getItem(NAME_KEY) || authSession?.user.displayName || "",
@@ -155,6 +156,15 @@ export default function Room() {
       hasAuthSession: Boolean(authSession),
     });
   });
+
+  useEffect(() => {
+    if (!squadId || !roomId || !canonicalSquadRoomId) return;
+    if (roomId === canonicalSquadRoomId) return;
+    const params = new URLSearchParams();
+    params.set("squadId", squadId);
+    if (squadName) params.set("squadName", squadName);
+    navigate(`/sala/${canonicalSquadRoomId}?${params.toString()}`, { replace: true });
+  }, [canonicalSquadRoomId, navigate, roomId, squadId, squadName]);
 
   useEffect(() => {
     if (!authSession) {
