@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import Database from "better-sqlite3";
 import type { RoomState, Role, Squad } from "./types";
 export type RoomAction =
@@ -20,16 +20,35 @@ db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS user_sessions (
+    token TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
   CREATE TABLE IF NOT EXISTS squads (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     invite_code TEXT NOT NULL UNIQUE,
     created_by_name TEXT NOT NULL,
+    owner_user_id TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS squad_members (
     squad_id TEXT NOT NULL,
+    user_id TEXT NULL,
     user_name TEXT NOT NULL,
     joined_at INTEGER NOT NULL,
     PRIMARY KEY (squad_id, user_name),
@@ -48,6 +67,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS participants (
     room_id TEXT NOT NULL,
     id TEXT NOT NULL,
+    user_id TEXT NULL,
     name TEXT NOT NULL,
     role TEXT NOT NULL,
     vote TEXT NULL,
@@ -71,6 +91,7 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_squads_invite_code ON squads(invite_code);
+  CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id);
   CREATE INDEX IF NOT EXISTS idx_participants_room ON participants(room_id);
   CREATE INDEX IF NOT EXISTS idx_rooms_updated ON rooms(updated_at);
   CREATE INDEX IF NOT EXISTS idx_stories_room_created ON stories(room_id, created_at);
@@ -80,9 +101,147 @@ const squadColumns = db.prepare("PRAGMA table_info(squads)").all() as Array<{ na
 if (!squadColumns.some((c) => c.name === "owner_session_id")) {
   db.exec("ALTER TABLE squads ADD COLUMN owner_session_id TEXT NOT NULL DEFAULT '';");
 }
+if (!squadColumns.some((c) => c.name === "owner_user_id")) {
+  db.exec("ALTER TABLE squads ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT '';");
+}
+const squadMemberColumns = db.prepare("PRAGMA table_info(squad_members)").all() as Array<{ name: string }>;
+if (!squadMemberColumns.some((c) => c.name === "user_id")) {
+  db.exec("ALTER TABLE squad_members ADD COLUMN user_id TEXT;");
+}
+const participantColumns = db.prepare("PRAGMA table_info(participants)").all() as Array<{ name: string }>;
+if (!participantColumns.some((c) => c.name === "user_id")) {
+  db.exec("ALTER TABLE participants ADD COLUMN user_id TEXT;");
+}
+db.exec("CREATE INDEX IF NOT EXISTS idx_squad_members_user_id ON squad_members(user_id);");
+db.exec("CREATE INDEX IF NOT EXISTS idx_participants_user_id ON participants(user_id);");
 const storyColumns = db.prepare("PRAGMA table_info(stories)").all() as Array<{ name: string }>;
 if (!storyColumns.some((c) => c.name === "votes_snapshot_json")) {
   db.exec("ALTER TABLE stories ADD COLUMN votes_snapshot_json TEXT NOT NULL DEFAULT '';");
+}
+
+export interface AuthUser {
+  id: string;
+  username: string;
+  displayName: string;
+}
+
+type UserDbRow = {
+  id: string;
+  username: string;
+  display_name: string;
+  password_hash: string;
+};
+
+function normalizeUsername(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function toAuthUser(row: Pick<UserDbRow, "id" | "username" | "display_name">): AuthUser {
+  return {
+    id: row.id,
+    username: row.username,
+    displayName: row.display_name,
+  };
+}
+
+function hashPassword(password: string) {
+  const salt = randomBytes(16).toString("hex");
+  const hash = scryptSync(password, salt, 64).toString("hex");
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password: string, stored: string) {
+  const [salt, hash] = stored.split(":");
+  if (!salt || !hash) return false;
+  const calculatedHash = scryptSync(password, salt, 64);
+  const storedHash = Buffer.from(hash, "hex");
+  if (storedHash.length !== calculatedHash.length) return false;
+  return timingSafeEqual(storedHash, calculatedHash);
+}
+
+function createUserSession(userId: string) {
+  const token = randomUUID();
+  const now = Date.now();
+  db.prepare("INSERT INTO user_sessions (token, user_id, created_at, last_seen) VALUES (?, ?, ?, ?)").run(
+    token,
+    userId,
+    now,
+    now,
+  );
+  return token;
+}
+
+export function registerUser(input: { username: string; displayName: string; password: string }) {
+  const username = normalizeUsername(input.username);
+  const displayName = input.displayName.trim();
+  const password = input.password;
+  if (!username || !displayName || !password) {
+    throw new Error("invalid_user_input");
+  }
+  if (username.length < 3) {
+    throw new Error("username_too_short");
+  }
+  if (displayName.length < 2) {
+    throw new Error("display_name_too_short");
+  }
+  if (password.length < 4) {
+    throw new Error("password_too_short");
+  }
+
+  const id = randomUUID();
+  const now = Date.now();
+  const passwordHash = hashPassword(password);
+  try {
+    db.prepare(
+      "INSERT INTO users (id, username, display_name, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+    ).run(id, username, displayName, passwordHash, now, now);
+  } catch (error: any) {
+    if (String(error?.message || "").includes("UNIQUE constraint failed: users.username")) {
+      throw new Error("username_already_exists");
+    }
+    throw error;
+  }
+  const token = createUserSession(id);
+  return {
+    user: {
+      id,
+      username,
+      displayName,
+    } satisfies AuthUser,
+    token,
+  };
+}
+
+export function loginUser(input: { username: string; password: string }) {
+  const username = normalizeUsername(input.username);
+  const row = db
+    .prepare("SELECT id, username, display_name, password_hash FROM users WHERE username = ? LIMIT 1")
+    .get(username) as UserDbRow | undefined;
+  if (!row) return null;
+  if (!verifyPassword(input.password, row.password_hash)) return null;
+  const token = createUserSession(row.id);
+  db.prepare("UPDATE users SET updated_at = ? WHERE id = ?").run(Date.now(), row.id);
+  return {
+    user: toAuthUser(row),
+    token,
+  };
+}
+
+export function getUserBySessionToken(token: string): AuthUser | null {
+  if (!token) return null;
+  const row = db
+    .prepare(
+      "SELECT u.id, u.username, u.display_name FROM user_sessions s INNER JOIN users u ON u.id = s.user_id WHERE s.token = ? LIMIT 1",
+    )
+    .get(token) as Pick<UserDbRow, "id" | "username" | "display_name"> | undefined;
+  if (!row) return null;
+  db.prepare("UPDATE user_sessions SET last_seen = ? WHERE token = ?").run(Date.now(), token);
+  return toAuthUser(row);
+}
+
+export function revokeSessionToken(token: string) {
+  if (!token) return;
+  db.prepare("DELETE FROM user_sessions WHERE token = ?").run(token);
 }
 
 const roomExistsStmt = db.prepare("SELECT id FROM rooms WHERE id = ?");
@@ -90,9 +249,10 @@ const createRoomStmt = db.prepare(
   "INSERT INTO rooms (id, story_name, is_voting, is_revealed, created_at, updated_at) VALUES (?, '', 0, 0, ?, ?)",
 );
 const upsertParticipantStmt = db.prepare(`
-  INSERT INTO participants (room_id, id, name, role, vote, has_voted, last_seen)
-  VALUES (@roomId, @participantId, @name, @role, @vote, @hasVoted, @lastSeen)
+  INSERT INTO participants (room_id, id, user_id, name, role, vote, has_voted, last_seen)
+  VALUES (@roomId, @participantId, @userId, @name, @role, @vote, @hasVoted, @lastSeen)
   ON CONFLICT(room_id, id) DO UPDATE SET
+    user_id = excluded.user_id,
     name = excluded.name,
     role = excluded.role,
     vote = excluded.vote,
@@ -122,33 +282,46 @@ function generateInviteCode() {
   return Math.random().toString(36).slice(2, 8).toUpperCase();
 }
 
-type SquadDb = Squad & { owner_session_id: string };
+type SquadDb = Squad & { owner_session_id: string; owner_user_id: string };
 
-function tryInsertSquad(name: string, createdByName: string, inviteCode: string, ownerSessionId: string) {
+function tryInsertSquad(
+  name: string,
+  createdByName: string,
+  inviteCode: string,
+  ownerSessionId: string,
+  ownerUserId: string,
+) {
   const id = randomUUID();
   const now = Date.now();
   db.prepare(
-    "INSERT INTO squads (id, name, invite_code, created_by_name, owner_session_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-  ).run(id, name, inviteCode, createdByName, ownerSessionId, now);
-  db.prepare("INSERT INTO squad_members (squad_id, user_name, joined_at) VALUES (?, ?, ?)").run(
+    "INSERT INTO squads (id, name, invite_code, created_by_name, owner_session_id, owner_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  ).run(id, name, inviteCode, createdByName, ownerSessionId, ownerUserId, now);
+  db.prepare("INSERT INTO squad_members (squad_id, user_id, user_name, joined_at) VALUES (?, ?, ?, ?)").run(
     id,
+    ownerUserId,
     createdByName.trim().toLowerCase(),
     now,
   );
   return { id, name, invite_code: inviteCode } as Squad;
 }
 
-export function listSquads(): Squad[] {
+export function listSquadsByUser(userId: string): Squad[] {
   return db
-    .prepare("SELECT id, name, invite_code, owner_session_id FROM squads ORDER BY created_at ASC")
-    .all() as SquadDb[];
+    .prepare(
+      `SELECT DISTINCT s.id, s.name, s.invite_code, s.owner_session_id, s.owner_user_id
+       FROM squads s
+       LEFT JOIN squad_members sm ON sm.squad_id = s.id
+       WHERE s.owner_user_id = ? OR sm.user_id = ?
+       ORDER BY s.created_at ASC`,
+    )
+    .all(userId, userId) as SquadDb[];
 }
 
-export function createSquad(name: string, createdByName: string, ownerSessionId: string): Squad {
+export function createSquad(name: string, createdByName: string, ownerSessionId: string, ownerUserId: string): Squad {
   for (let i = 0; i < 10; i += 1) {
     const inviteCode = generateInviteCode();
     try {
-      return tryInsertSquad(name, createdByName, inviteCode, ownerSessionId);
+      return tryInsertSquad(name, createdByName, inviteCode, ownerSessionId, ownerUserId);
     } catch (error: any) {
       if (String(error?.message || "").includes("UNIQUE constraint failed: squads.invite_code")) {
         continue;
@@ -159,25 +332,32 @@ export function createSquad(name: string, createdByName: string, ownerSessionId:
   throw new Error("invite_code_generation_failed");
 }
 
-export function joinSquadByInvite(inviteCode: string, userName: string): Squad | null {
+export function joinSquadByInvite(inviteCode: string, userName: string, userId: string): Squad | null {
   const squad = db
     .prepare("SELECT id, name, invite_code FROM squads WHERE invite_code = ? LIMIT 1")
     .get(inviteCode) as Squad | undefined;
   if (!squad) return null;
-  db.prepare("INSERT OR REPLACE INTO squad_members (squad_id, user_name, joined_at) VALUES (?, ?, ?)").run(
+  db.prepare("INSERT OR REPLACE INTO squad_members (squad_id, user_id, user_name, joined_at) VALUES (?, ?, ?, ?)").run(
     squad.id,
+    userId,
     userName.trim().toLowerCase(),
     Date.now(),
   );
   return squad;
 }
 
-export function deleteSquadByOwner(squadId: string, ownerSessionId: string): "deleted" | "forbidden" | "not_found" {
+export function deleteSquadByOwner(
+  squadId: string,
+  ownerSessionId: string,
+  ownerUserId: string,
+): "deleted" | "forbidden" | "not_found" {
   const squad = db
-    .prepare("SELECT owner_session_id FROM squads WHERE id = ? LIMIT 1")
-    .get(squadId) as { owner_session_id: string } | undefined;
+    .prepare("SELECT owner_session_id, owner_user_id FROM squads WHERE id = ? LIMIT 1")
+    .get(squadId) as { owner_session_id: string; owner_user_id: string } | undefined;
   if (!squad) return "not_found";
-  if (squad.owner_session_id !== ownerSessionId) return "forbidden";
+  const isOwnerUser = ownerUserId && squad.owner_user_id === ownerUserId;
+  const isLegacyOwner = ownerSessionId && squad.owner_session_id === ownerSessionId;
+  if (!isOwnerUser && !isLegacyOwner) return "forbidden";
   db.prepare("DELETE FROM squads WHERE id = ?").run(squadId);
   return "deleted";
 }
@@ -237,6 +417,7 @@ export function getRoomState(roomId: string): RoomState {
 export function upsertPresence(input: {
   roomId: string;
   participantId: string;
+  userId: string;
   name: string;
   role: Role;
   vote: string | null;
@@ -247,6 +428,7 @@ export function upsertPresence(input: {
   upsertParticipantStmt.run({
     roomId: input.roomId,
     participantId: input.participantId,
+    userId: input.userId,
     name: input.name,
     role: input.role,
     vote: input.vote,

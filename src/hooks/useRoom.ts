@@ -11,6 +11,38 @@ function getErrorMessage(error: unknown, fallback: string) {
   return message || fallback;
 }
 
+function debugLog(hypothesisId: string, message: string, data: Record<string, unknown>) {
+  // #region agent log
+  if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+    navigator.sendBeacon(
+      "http://127.0.0.1:7533/ingest/dba1853c-f8d2-4598-bce6-3443fc92be97",
+      JSON.stringify({
+        sessionId: "df5e7d",
+        runId: "pre-fix-review",
+        hypothesisId,
+        location: "src/hooks/useRoom.ts",
+        message,
+        data,
+        timestamp: Date.now(),
+      }),
+    );
+  }
+  fetch("http://127.0.0.1:7533/ingest/dba1853c-f8d2-4598-bce6-3443fc92be97", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "df5e7d" },
+    body: JSON.stringify({
+      sessionId: "df5e7d",
+      runId: "pre-fix-review",
+      hypothesisId,
+      location: "src/hooks/useRoom.ts",
+      message,
+      data,
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
+}
+
 const emptyRoomState = (roomId: string): RoomState => ({
   roomId,
   storyName: "",
@@ -33,12 +65,24 @@ export function useRoom(roomId: string, userName: string, isModerator: boolean) 
   const refreshRoom = useCallback(async () => {
     if (!roomId) return;
     const { room } = await apiGetRoom(roomId);
+    debugLog("H3", "use_room_refresh_ok", {
+      roomId,
+      isVoting: room.isVoting,
+      participantsCount: Object.keys(room.participants).length,
+    });
     setRoomState(room);
   }, [roomId]);
 
   const upsertPresence = useCallback(
     async (vote: string | null, hasVoted: boolean) => {
       if (!roomId || !userName) return;
+      debugLog("H3", "use_room_upsert_presence_start", {
+        roomId,
+        hasUserName: Boolean(userName),
+        isModerator,
+        hasVoted,
+        voteProvided: vote !== null,
+      });
       await apiUpsertPresence(roomId, {
         participantId: myId.current,
         name: userName,
@@ -56,7 +100,12 @@ export function useRoom(roomId: string, userName: string, isModerator: boolean) 
       payload?: { storyName?: string; finalEstimate?: string },
     ) => {
       if (!roomId) return;
-      await apiRoomAction(roomId, { action, ...payload });
+      debugLog("H3", "use_room_action_start", {
+        roomId,
+        action,
+        payloadPresent: Boolean(payload),
+      });
+      await apiRoomAction(roomId, { participantId: myId.current, action, ...payload });
     },
     [roomId],
   );

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
@@ -26,7 +26,8 @@ import { DeleteSquadDialog } from "@/components/delete-squad-dialog";
 import { brandAssets } from "@/lib/branding";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { apiDeleteSquad, apiListSquadsForSession } from "@/lib/api";
+import { apiDeleteSquad, apiListSquadsForSession, apiMe } from "@/lib/api";
+import { clearAuthSession, getAuthSession } from "@/lib/auth-session";
 import { bindSquadRoom, resolveSquadRoomId, setLastSquadId } from "@/lib/squad-room";
 import { getOrCreateSessionId } from "@/lib/session";
 
@@ -44,6 +45,28 @@ function getApiErrorMessage(error: unknown, fallback: string) {
   }
 }
 
+function debugLog(hypothesisId: string, message: string, data: Record<string, unknown>) {
+  const payload = {
+    sessionId: "df5e7d",
+    runId: "pre-fix-review",
+    hypothesisId,
+    location: "src/pages/Room.tsx",
+    message,
+    data,
+    timestamp: Date.now(),
+  };
+  // #region agent log
+  if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+    navigator.sendBeacon("http://127.0.0.1:7533/ingest/dba1853c-f8d2-4598-bce6-3443fc92be97", JSON.stringify(payload));
+  }
+  fetch("http://127.0.0.1:7533/ingest/dba1853c-f8d2-4598-bce6-3443fc92be97", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "df5e7d" },
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+  // #endregion
+}
+
 export default function Room() {
   const { roomId = "" } = useParams<{ roomId: string }>();
   const [searchParams] = useSearchParams();
@@ -51,7 +74,11 @@ export default function Room() {
   const isMod = searchParams.get("mod") === "1";
   const squadName = searchParams.get("squadName") || searchParams.get("team") || "";
   const squadId = searchParams.get("squadId");
-  const initialName = searchParams.get("name") || localStorage.getItem(NAME_KEY) || "";
+  const authSession = useMemo(() => getAuthSession(), []);
+  const initialName = useMemo(
+    () => searchParams.get("name") || authSession?.user.displayName || localStorage.getItem(NAME_KEY) || "",
+    [authSession, searchParams],
+  );
   const [userName, setUserName] = useState(initialName);
   const [entered, setEntered] = useState(initialName.trim().length >= 2);
   const [storyInput, setStoryInput] = useState("");
@@ -60,6 +87,9 @@ export default function Room() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [deletingSquadId, setDeletingSquadId] = useState("");
   const [squadToDelete, setSquadToDelete] = useState<Squad | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const renderCountRef = useRef(0);
+  renderCountRef.current += 1;
 
   const {
     participants,
@@ -99,17 +129,67 @@ export default function Room() {
   const activeSquad = squads.find((s) => s.id === squadId);
   const sessionId = useMemo(() => getOrCreateSessionId(), []);
 
+  useEffect(() => {
+    debugLog("H5", "room_render_committed", {
+      roomId,
+      renderCount: renderCountRef.current,
+      authChecked,
+      entered,
+      hasAuthSession: Boolean(authSession),
+    });
+  });
+
+  useEffect(() => {
+    if (!authSession) {
+      debugLog("H1", "room_auth_missing_session_redirect", { roomId });
+      navigate("/login");
+      return;
+    }
+    void (async () => {
+      try {
+        const me = await apiMe();
+        debugLog("H1", "room_auth_me_ok", {
+          roomId,
+          userId: me.user.id,
+          username: me.user.username,
+          hadInitialName: Boolean(initialName),
+        });
+        if (!initialName) {
+          setUserName(me.user.displayName);
+        }
+      } catch {
+        debugLog("H1", "room_auth_me_failed", { roomId });
+        clearAuthSession();
+        navigate("/login");
+        return;
+      } finally {
+        setAuthChecked(true);
+      }
+    })();
+  }, [authSession, initialName, navigate, roomId]);
+
   const loadSquads = async () => {
     try {
       const result = await apiListSquadsForSession(sessionId);
+      debugLog("H4", "room_load_squads_ok", {
+        roomId,
+        squadId,
+        squadsCount: result.squads.length,
+      });
       setSquads(result.squads);
     } catch {
+      debugLog("H4", "room_load_squads_failed", { roomId, squadId });
       // Falha de squads não deve bloquear sala.
     }
   };
 
   const goToSquadRoom = (nextSquad: Squad) => {
     const targetRoom = resolveSquadRoomId(nextSquad.id);
+    debugLog("H4", "room_go_to_squad_room", {
+      fromRoomId: roomId,
+      nextSquadId: nextSquad.id,
+      targetRoom,
+    });
     bindSquadRoom(nextSquad.id, targetRoom);
     setLastSquadId(nextSquad.id);
     const params = new URLSearchParams({
@@ -122,8 +202,9 @@ export default function Room() {
   };
 
   useEffect(() => {
+    if (!authChecked) return;
     void loadSquads();
-  }, [sessionId]);
+  }, [authChecked, sessionId]);
 
   const deleteSquad = async (squad: Squad) => {
     setDeletingSquadId(squad.id);
@@ -166,6 +247,14 @@ export default function Room() {
     localStorage.setItem(NAME_KEY, userName.trim());
     setEntered(true);
   };
+
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-sm text-muted-foreground">
+        Validando sessão...
+      </div>
+    );
+  }
 
   if (!entered) {
     return (

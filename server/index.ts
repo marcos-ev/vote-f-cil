@@ -1,6 +1,7 @@
 import http from "node:http";
 import express from "express";
 import cors from "cors";
+import { authRouter } from "./routes/auth";
 import { squadsRouter } from "./routes/squads";
 import { roomsRouter } from "./routes/rooms";
 import { createRealtimeServer } from "./ws";
@@ -33,6 +34,7 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "poker-server" });
 });
 
+app.use("/api/auth", authRouter);
 app.use("/api/squads", squadsRouter);
 app.use("/api/rooms", roomsRouter);
 

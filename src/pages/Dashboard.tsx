@@ -1,19 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Copy, Link2, PanelLeftClose, PanelLeftOpen, Plus, Trash2, Users } from "lucide-react";
+import { Copy, Link2, LogOut, PanelLeftClose, PanelLeftOpen, Plus, Trash2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { DeleteSquadDialog } from "@/components/delete-squad-dialog";
 import { brandAssets } from "@/lib/branding";
-import { apiCreateSquad, apiDeleteSquad, apiJoinSquad, apiListSquads, apiListSquadsForSession } from "@/lib/api";
+import { apiCreateSquad, apiDeleteSquad, apiJoinSquad, apiListSquadsForSession, apiLogout, apiMe } from "@/lib/api";
+import { clearAuthSession, getAuthSession } from "@/lib/auth-session";
 import { bindSquadRoom, getLastSquadId, resolveSquadRoomId, setLastSquadId } from "@/lib/squad-room";
 import { getOrCreateSessionId } from "@/lib/session";
 
 const LAST_NAME_KEY = "poker-display-name";
 const generateRoomId = () => Math.random().toString(36).substring(2, 8);
-type Squad = Awaited<ReturnType<typeof apiListSquads>>["squads"][number];
+type Squad = Awaited<ReturnType<typeof apiListSquadsForSession>>["squads"][number];
 
 function getApiErrorMessage(error: unknown, fallback: string) {
   const raw = error instanceof Error ? String(error.message || "").trim() : "";
@@ -26,14 +27,42 @@ function getApiErrorMessage(error: unknown, fallback: string) {
   }
 }
 
-function extractRoomId(value: string): string | null {
+function debugLog(hypothesisId: string, message: string, data: Record<string, unknown>) {
+  // #region agent log
+  fetch("http://127.0.0.1:7533/ingest/dba1853c-f8d2-4598-bce6-3443fc92be97", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "df5e7d" },
+    body: JSON.stringify({
+      sessionId: "df5e7d",
+      runId: "pre-fix-review",
+      hypothesisId,
+      location: "src/pages/Dashboard.tsx",
+      message,
+      data,
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
+}
+
+function isValidRoomId(roomId: string) {
+  return /^[a-zA-Z0-9_-]{4,32}$/.test(roomId);
+}
+
+function parseRoomInput(value: string): { roomId: string; queryParams: URLSearchParams } | null {
   const input = value.trim();
   if (!input) return null;
-  if (!input.includes("/")) return input;
+  if (!input.includes("/")) {
+    return isValidRoomId(input) ? { roomId: input, queryParams: new URLSearchParams() } : null;
+  }
+
   try {
-    const url = new URL(input);
+    const base = window.location.origin;
+    const url = new URL(input, base);
     const parts = url.pathname.split("/").filter(Boolean);
-    if (parts[0] === "sala" && parts[1]) return parts[1];
+    if (parts[0] === "sala" && parts[1] && isValidRoomId(parts[1])) {
+      return { roomId: parts[1], queryParams: url.searchParams };
+    }
     return null;
   } catch {
     return null;
@@ -43,6 +72,7 @@ function extractRoomId(value: string): string | null {
 export default function Dashboard() {
   const navigate = useNavigate();
   const [name, setName] = useState(localStorage.getItem(LAST_NAME_KEY) || "");
+  const [authChecked, setAuthChecked] = useState(false);
   const [squads, setSquads] = useState<Squad[]>([]);
   const [newSquadName, setNewSquadName] = useState("");
   const [inviteCodeInput, setInviteCodeInput] = useState("");
@@ -82,8 +112,15 @@ export default function Dashboard() {
     try {
       setLoadingSquads(true);
       const result = await apiListSquadsForSession(sessionId);
+      debugLog("H2", "dashboard_fetch_squads_ok", {
+        squadsCount: result.squads.length,
+        hasActiveSquad: Boolean(activeSquadId),
+      });
       setSquads(result.squads);
     } catch (error) {
+      debugLog("H2", "dashboard_fetch_squads_failed", {
+        error: error instanceof Error ? error.message : "unknown",
+      });
       console.error(error);
       toast.error("Falha ao carregar squads. Tente novamente.");
     } finally {
@@ -92,8 +129,58 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
+    const session = getAuthSession();
+    debugLog("H1", "dashboard_auth_bootstrap_start", {
+      hasSession: Boolean(session),
+      hasToken: Boolean(session?.token),
+    });
+    if (!session) {
+      debugLog("H1", "dashboard_auth_bootstrap_redirect_login", {});
+      navigate("/login");
+      return;
+    }
+    void (async () => {
+      try {
+        const me = await apiMe();
+        debugLog("H1", "dashboard_auth_bootstrap_me_ok", {
+          userId: me.user.id,
+          username: me.user.username,
+        });
+        setName(me.user.displayName);
+        localStorage.setItem(LAST_NAME_KEY, me.user.displayName);
+      } catch {
+        debugLog("H1", "dashboard_auth_bootstrap_me_failed", {});
+        clearAuthSession();
+        navigate("/login");
+        return;
+      } finally {
+        setAuthChecked(true);
+      }
+    })();
+  }, [navigate]);
+
+  useEffect(() => {
+    if (!authChecked) return;
     void fetchSquads();
-  }, [sessionId]);
+  }, [authChecked, sessionId]);
+
+  const logout = async () => {
+    try {
+      await apiLogout();
+    } catch {
+      // Mesmo com falha de rede, limpa sessão local.
+    }
+    clearAuthSession();
+    navigate("/login");
+  };
+
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-sm text-muted-foreground">
+        Carregando usuário...
+      </div>
+    );
+  }
 
   const createSquad = async () => {
     if (!canStart) {
@@ -113,6 +200,10 @@ export default function Dashboard() {
         ownerSessionId: sessionId,
       });
       const squad = result.squad;
+      debugLog("H2", "dashboard_create_squad_ok", {
+        squadId: squad.id,
+        squadName: squad.name,
+      });
       toast.success(`Squad criada! Convite: ${squad.invite_code}`);
       setNewSquadName("");
       setActiveSquadId(squad.id);
@@ -121,6 +212,9 @@ export default function Dashboard() {
       await fetchSquads();
       goToRoom({ id: squad.id, name: squad.name });
     } catch (error) {
+      debugLog("H2", "dashboard_create_squad_failed", {
+        error: error instanceof Error ? error.message : "unknown",
+      });
       console.error(error);
       toast.error("Não foi possível criar a squad.");
     } finally {
@@ -207,18 +301,19 @@ export default function Dashboard() {
       toast.error("Digite seu nome para entrar na sala");
       return;
     }
-    const roomId = extractRoomId(roomInput);
-    if (!roomId) {
+    const parsedInput = parseRoomInput(roomInput);
+    if (!parsedInput) {
       toast.error("Código ou link de sala inválido");
       return;
     }
     persistIdentity();
-    const params = new URLSearchParams({ name: name.trim() });
+    const params = new URLSearchParams(parsedInput.queryParams);
+    params.set("name", name.trim());
     if (activeSquad) {
       params.set("squadId", activeSquad.id);
       params.set("squadName", activeSquad.name);
     }
-    navigate(`/sala/${roomId}?${params.toString()}`);
+    navigate(`/sala/${parsedInput.roomId}?${params.toString()}`);
   };
 
   return (
@@ -235,7 +330,13 @@ export default function Dashboard() {
             <img src={brandAssets.wordmarkLight} alt="CD2 Tech" className="h-8 block dark:hidden cursor-pointer" />
           </button>
           <div className="absolute right-4">
-            <ThemeToggle />
+            <div className="flex items-center gap-2">
+              <ThemeToggle />
+              <Button variant="outline" size="sm" onClick={logout} className="gap-1.5">
+                <LogOut className="w-3.5 h-3.5" />
+                Sair
+              </Button>
+            </div>
           </div>
         </div>
       </header>
@@ -343,10 +444,11 @@ export default function Dashboard() {
               <label className="text-sm font-medium mb-1.5 block">Seu nome</label>
               <Input
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                readOnly
                 placeholder="Ex: Marco"
                 className="bg-secondary border-border"
               />
+              <p className="text-xs text-muted-foreground mt-1">Nome vinculado ao usuário logado.</p>
             </div>
           </div>
 
