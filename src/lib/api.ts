@@ -597,19 +597,18 @@ export async function apiRoomAction(
     if (input.action === "transfer_moderator") {
       const targetId = String(input.targetParticipantId || "").trim();
       if (!targetId) throw new Error("Selecione um participante para receber moderação.");
-      if (targetId === input.participantId) throw new Error("Você já é o moderador atual.");
+      if (targetId === input.participantId && isCurrentResponsible) {
+        throw new Error("Você já é o moderador atual.");
+      }
       const target = participants[targetId];
       if (!target) throw new Error("Participante alvo não encontrado na sala.");
-      participants[input.participantId] = {
-        ...participants[input.participantId],
-        role: "player",
-        lastSeen: now,
-      };
-      participants[targetId] = {
-        ...participants[targetId],
-        role: "moderator",
-        lastSeen: now,
-      };
+      Object.keys(participants).forEach((participantId) => {
+        participants[participantId] = {
+          ...participants[participantId],
+          role: participantId === targetId ? "moderator" : "player",
+          lastSeen: now,
+        };
+      });
       tx.set(
         ref,
         {

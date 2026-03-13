@@ -125,8 +125,8 @@ export default function Room() {
   const isSquadOwner = Boolean(currentSquad?.canDelete);
   const canTransferResponsibility = squadId ? isSquadOwner : isModerator;
   const transferCandidates = useMemo(
-    () => participantList.filter((participant) => participant.role !== "moderator" && participant.id !== myId),
-    [myId, participantList],
+    () => participantList.filter((participant) => participant.role !== "moderator"),
+    [participantList],
   );
 
   const numericVotes = useMemo(() => {
