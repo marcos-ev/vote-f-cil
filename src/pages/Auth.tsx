@@ -5,19 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { brandAssets } from "@/lib/branding";
-import { apiLogin, apiRegister } from "@/lib/api";
+import { loginWithFirebase, registerWithFirebase } from "@/lib/firebase-auth";
 import { getOrCreateSessionId } from "@/lib/session";
-import { setAuthSession } from "@/lib/auth-session";
 
-function getApiErrorMessage(error: unknown, fallback: string) {
+function getErrorMessage(error: unknown, fallback: string) {
   const raw = error instanceof Error ? String(error.message || "").trim() : "";
-  if (!raw) return fallback;
-  try {
-    const parsed = JSON.parse(raw) as { error?: string };
-    return parsed.error || fallback;
-  } catch {
-    return raw || fallback;
-  }
+  return raw || fallback;
 }
 
 export default function Auth() {
@@ -42,15 +35,14 @@ export default function Auth() {
       const normalizedUsername = username.trim().toLowerCase();
       const result =
         mode === "register"
-          ? await apiRegister({ username: normalizedUsername, displayName: displayName.trim(), password })
-          : await apiLogin({ username: normalizedUsername, password });
-      setAuthSession(result);
+          ? await registerWithFirebase({ username: normalizedUsername, displayName: displayName.trim(), password })
+          : await loginWithFirebase({ username: normalizedUsername, password });
       localStorage.setItem("poker-display-name", result.user.displayName);
       getOrCreateSessionId();
       toast.success(mode === "register" ? "Cadastro realizado!" : "Login efetuado!");
       navigate("/");
     } catch (error) {
-      toast.error(getApiErrorMessage(error, mode === "register" ? "Falha no cadastro" : "Falha no login"));
+      toast.error(getErrorMessage(error, mode === "register" ? "Falha no cadastro" : "Falha no login"));
     } finally {
       setLoading(false);
     }

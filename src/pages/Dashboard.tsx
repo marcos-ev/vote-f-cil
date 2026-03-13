@@ -7,7 +7,8 @@ import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { DeleteSquadDialog } from "@/components/delete-squad-dialog";
 import { brandAssets } from "@/lib/branding";
-import { apiCreateSquad, apiDeleteSquad, apiJoinSquad, apiListSquadsForSession, apiLogout, apiMe } from "@/lib/api";
+import { apiCreateSquad, apiDeleteSquad, apiJoinSquad, apiListSquadsForSession } from "@/lib/api";
+import { getCurrentFirebaseSession, logoutFirebase } from "@/lib/firebase-auth";
 import { clearAuthSession, getAuthSession } from "@/lib/auth-session";
 import { bindSquadRoom, getLastSquadId, resolveSquadRoomId, setLastSquadId } from "@/lib/squad-room";
 import { getOrCreateSessionId } from "@/lib/session";
@@ -141,7 +142,12 @@ export default function Dashboard() {
     }
     void (async () => {
       try {
-        const me = await apiMe();
+        const me = await getCurrentFirebaseSession();
+        if (!me) {
+          clearAuthSession();
+          navigate("/login");
+          return;
+        }
         debugLog("H1", "dashboard_auth_bootstrap_me_ok", {
           userId: me.user.id,
           username: me.user.username,
@@ -165,12 +171,7 @@ export default function Dashboard() {
   }, [authChecked, sessionId]);
 
   const logout = async () => {
-    try {
-      await apiLogout();
-    } catch {
-      // Mesmo com falha de rede, limpa sessão local.
-    }
-    clearAuthSession();
+    await logoutFirebase();
     navigate("/login");
   };
 

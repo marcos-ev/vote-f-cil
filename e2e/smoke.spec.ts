@@ -5,9 +5,9 @@ test("fluxo básico: criar squad e iniciar/revelar votação", async ({ page }) 
   await page.goto("/login");
 
   await page.getByRole("button", { name: "Não tem conta? Cadastre-se" }).click();
-  await page.getByPlaceholder("Ex: Marco").fill("Marco QA");
-  await page.getByPlaceholder("Ex: marco").fill(`marco${suffix}`);
-  await page.getByPlaceholder("Sua senha").fill("1234");
+  await page.getByPlaceholder(/^Ex: Marco$/).fill("Marco QA");
+  await page.getByPlaceholder(/^Ex: marco$/).fill(`marco${suffix}`);
+  await page.getByPlaceholder("Sua senha").fill("123456");
   await page.getByRole("button", { name: "Criar conta" }).click();
   await expect(page).toHaveURL("/");
 
@@ -15,7 +15,10 @@ test("fluxo básico: criar squad e iniciar/revelar votação", async ({ page }) 
   await page.getByRole("button", { name: "Criar", exact: true }).click();
 
   await expect(page).toHaveURL(/\/sala\//);
-  await page.getByPlaceholder("Ex: US-123 - Login com SSO").fill("SMOKE-1");
+  const storyInput = page.getByPlaceholder("Ex: US-123 - Login com SSO");
+  await expect(storyInput).toBeVisible();
+  await storyInput.fill("SMOKE-1");
+  await expect(page.getByRole("button", { name: "Iniciar Votação" })).toBeEnabled();
   await page.getByRole("button", { name: "Iniciar Votação" }).click();
 
   await expect(page.getByText("Votando em")).toBeVisible();

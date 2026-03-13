@@ -1,3 +1,5 @@
+import { firebaseAuth } from "@/lib/firebase";
+
 export interface AuthUser {
   id: string;
   username: string;
@@ -33,6 +35,24 @@ export function clearAuthSession() {
   localStorage.removeItem(AUTH_SESSION_KEY);
 }
 
-export function getAuthToken() {
-  return getAuthSession()?.token || "";
+export async function getAuthToken() {
+  const currentUser = firebaseAuth.currentUser;
+  if (!currentUser) {
+    return getAuthSession()?.token || "";
+  }
+  const freshToken = await currentUser.getIdToken().catch(() => "");
+  if (!freshToken) return getAuthSession()?.token || "";
+
+  const existing = getAuthSession();
+  const username = existing?.user?.username || String(currentUser.email || "").split("@")[0] || currentUser.uid;
+  const displayName = currentUser.displayName?.trim() || existing?.user?.displayName || username;
+  setAuthSession({
+    token: freshToken,
+    user: {
+      id: currentUser.uid,
+      username,
+      displayName,
+    },
+  });
+  return freshToken;
 }

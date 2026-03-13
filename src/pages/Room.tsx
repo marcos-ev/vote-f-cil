@@ -26,7 +26,8 @@ import { DeleteSquadDialog } from "@/components/delete-squad-dialog";
 import { brandAssets } from "@/lib/branding";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { apiDeleteSquad, apiListSquadsForSession, apiMe } from "@/lib/api";
+import { apiDeleteSquad, apiListSquadsForSession } from "@/lib/api";
+import { getCurrentFirebaseSession } from "@/lib/firebase-auth";
 import { clearAuthSession, getAuthSession } from "@/lib/auth-session";
 import { bindSquadRoom, resolveSquadRoomId, setLastSquadId } from "@/lib/squad-room";
 import { getOrCreateSessionId } from "@/lib/session";
@@ -106,7 +107,7 @@ export default function Room() {
     newStory,
     confirmEstimate,
     resetRoom,
-  } = useRoom(roomId, entered ? userName.trim() : "", isMod);
+  } = useRoom(roomId, authChecked && entered ? userName.trim() : "", isMod);
 
   const participantList = Object.values(participants);
 
@@ -147,7 +148,12 @@ export default function Room() {
     }
     void (async () => {
       try {
-        const me = await apiMe();
+        const me = await getCurrentFirebaseSession();
+        if (!me) {
+          clearAuthSession();
+          navigate("/login");
+          return;
+        }
         debugLog("H1", "room_auth_me_ok", {
           roomId,
           userId: me.user.id,

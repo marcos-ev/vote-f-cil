@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { apiGetRoom, apiLeaveRoom, apiRoomAction, apiUpsertPresence } from "@/lib/api";
-import { connectRoomRealtime } from "@/lib/realtime";
+import { apiGetRoom, apiLeaveRoom, apiRoomAction, apiUpsertPresence, subscribeRoom } from "@/lib/api";
 import type { RoomState } from "@/types/poker";
 import { toast } from "sonner";
 
@@ -112,14 +111,32 @@ export function useRoom(roomId: string, userName: string, isModerator: boolean) 
 
   useEffect(() => {
     if (!roomId) return;
+    let unsubscribe: (() => void) | null = null;
+    let active = true;
+    setConnected(false);
     void refreshRoom().catch(() => undefined);
-    const connection = connectRoomRealtime(roomId, {
-      onOpen: () => setConnected(true),
-      onClose: () => setConnected(false),
-      onRoomUpdate: (state) => setRoomState(state),
+    void subscribeRoom(
+      roomId,
+      (state) => {
+        if (!active) return;
+        setConnected(true);
+        setRoomState(state);
+      },
+      () => {
+        if (!active) return;
+        setConnected(false);
+      },
+    ).then((unsub) => {
+      if (!active) {
+        unsub();
+        return;
+      }
+      unsubscribe = unsub;
     });
     return () => {
-      connection.close();
+      active = false;
+      setConnected(false);
+      unsubscribe?.();
     };
   }, [refreshRoom, roomId]);
 
