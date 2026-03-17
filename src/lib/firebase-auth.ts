@@ -39,6 +39,7 @@ async function toSession(user: User, forcedUsername?: string): Promise<AuthSessi
       username,
       displayName,
       photoURL: user.photoURL || undefined,
+      email: user.email || undefined,
     },
   };
 }

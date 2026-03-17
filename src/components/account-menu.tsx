@@ -94,9 +94,12 @@ export function AccountMenu({ squads, onLogout, onDisplayNameUpdated }: AccountM
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-80 space-y-1 p-2">
         <DropdownMenuLabel className="font-medium">
-          <div className="flex items-center gap-2">
-            <UserCircle2 className="h-4 w-4" />
-            Conta
+          <div className="space-y-0.5">
+            <div className="flex items-center gap-2">
+              <UserCircle2 className="h-4 w-4" />
+              Conta
+            </div>
+            {session?.user.email && <p className="text-xs font-normal text-muted-foreground">{session.user.email}</p>}
           </div>
         </DropdownMenuLabel>
         <div className="rounded-md border border-border p-2 space-y-2">

@@ -5,6 +5,7 @@ export interface AuthUser {
   username: string;
   displayName: string;
   photoURL?: string;
+  email?: string;
 }
 
 export interface AuthSession {
@@ -54,6 +55,7 @@ export async function getAuthToken() {
       username,
       displayName,
       photoURL: currentUser.photoURL || undefined,
+      email: currentUser.email || undefined,
     },
   });
   return freshToken;
