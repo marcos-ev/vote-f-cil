@@ -122,7 +122,17 @@ export default function Room() {
     transferModerator,
   } = useRoom(roomId, authChecked && entered ? userName.trim() : "", authChecked, squadId);
 
-  const participantList = Object.values(participants);
+  const participantList = useMemo(
+    () =>
+      Object.values(participants).sort((a, b) => {
+        // Keep a deterministic order so cards do not jump around on heartbeat updates.
+        if (a.role !== b.role) return a.role === "moderator" ? -1 : 1;
+        const byName = a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" });
+        if (byName !== 0) return byName;
+        return a.id.localeCompare(b.id);
+      }),
+    [participants],
+  );
   const canTransferResponsibility = isModerator;
   const transferCandidates = useMemo(
     () => participantList.filter((participant) => participant.role !== "moderator"),
