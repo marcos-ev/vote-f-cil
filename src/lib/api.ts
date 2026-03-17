@@ -14,7 +14,7 @@ import {
   where,
   type Unsubscribe,
 } from "firebase/firestore";
-import type { Role, RoomState, Squad, StoryDetail } from "@/types/poker";
+import { DECK, type Role, type RoomState, type Squad, type StoryDetail } from "@/types/poker";
 import { getCurrentFirebaseSession } from "@/lib/firebase-auth";
 import { firebaseDb } from "@/lib/firebase";
 
@@ -164,6 +164,27 @@ function getNumericStats(votes: string[]) {
     min: Math.min(...numeric),
     max: Math.max(...numeric),
   };
+}
+
+function getMostVotedEstimate(votes: string[]) {
+  if (votes.length === 0) return null;
+
+  const counts = new Map<string, number>();
+  votes.forEach((vote) => {
+    counts.set(vote, (counts.get(vote) || 0) + 1);
+  });
+
+  const deckOrder = new Map<string, number>(DECK.map((value, index) => [value, index]));
+  return Array.from(counts.entries())
+    .sort((a, b) => {
+      if (b[1] !== a[1]) return b[1] - a[1];
+      const aOrder = deckOrder.get(a[0]);
+      const bOrder = deckOrder.get(b[0]);
+      if (aOrder !== undefined && bOrder !== undefined) return aOrder - bOrder;
+      if (aOrder !== undefined) return -1;
+      if (bOrder !== undefined) return 1;
+      return a[0].localeCompare(b[0]);
+    })[0]?.[0] || null;
 }
 
 function mapSquadsFromDocs(docs: Array<{ id: string; data: () => unknown }>, currentUserId: string): Squad[] {
@@ -531,6 +552,7 @@ export async function apiRoomAction(
       const votes = Object.values(participants)
         .filter((p) => p.hasVoted && p.vote !== null)
         .map((p) => p.vote as string);
+      const mostVotedEstimate = getMostVotedEstimate(votes);
       const stats = getNumericStats(votes);
       const details = Array.isArray(current.storyDetails) ? [...current.storyDetails] : [];
       const nextId = details.length > 0 ? Math.max(...details.map((d) => d.id)) + 1 : 1;
@@ -544,7 +566,7 @@ export async function apiRoomAction(
       details.push({
         id: nextId,
         storyName: current.storyName || "",
-        finalEstimate: input.finalEstimate || null,
+        finalEstimate: mostVotedEstimate || input.finalEstimate || null,
         stats: {
           votesCount: votes.length,
           avg: stats.avg,

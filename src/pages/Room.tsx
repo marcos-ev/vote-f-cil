@@ -135,6 +135,25 @@ export default function Room() {
       .filter((vote) => !Number.isNaN(vote));
   }, [participants]);
 
+  const mostVotedEstimate = useMemo(() => {
+    const votes = Object.values(participants)
+      .filter((p) => p.hasVoted && p.vote !== null)
+      .map((p) => p.vote as string);
+    if (votes.length === 0) return null;
+
+    const counts = new Map<string, number>();
+    votes.forEach((vote) => {
+      counts.set(vote, (counts.get(vote) || 0) + 1);
+    });
+
+    return DECK.filter((value) => counts.has(value))
+      .sort((a, b) => {
+        const countDiff = (counts.get(b) || 0) - (counts.get(a) || 0);
+        if (countDiff !== 0) return countDiff;
+        return DECK.indexOf(a) - DECK.indexOf(b);
+      })[0] || null;
+  }, [participants]);
+
   const suggestedEstimate = useMemo(() => {
     if (numericVotes.length === 0) return null;
     const avg = numericVotes.reduce((a, b) => a + b, 0) / numericVotes.length;
@@ -553,13 +572,13 @@ export default function Room() {
                         <SkipForward className="w-4 h-4" />
                         Limpar História Atual
                       </Button>
-                      {suggestedEstimate && (
+                      {mostVotedEstimate && (
                         <Button
-                          onClick={() => confirmEstimate(suggestedEstimate)}
+                          onClick={() => confirmEstimate(mostVotedEstimate)}
                           className="w-full sm:w-auto gap-1.5 font-semibold"
                         >
                           <CheckCircle2 className="w-4 h-4" />
-                          Confirmar Estimativa ({suggestedEstimate})
+                          Confirmar Estimativa ({mostVotedEstimate})
                         </Button>
                       )}
                     </>
