@@ -405,7 +405,7 @@ export default function Room() {
       </header>
 
       <aside
-        className={`hidden md:block fixed left-0 top-0 h-screen pt-16 bg-card border-r border-border p-3 transition-all z-20 ${sidebarCollapsed ? "w-16" : "w-72"
+        className={`hidden md:flex md:flex-col fixed left-0 top-0 h-screen pt-16 bg-card border-r border-border p-3 transition-all z-20 ${sidebarCollapsed ? "w-16" : "w-72"
           }`}
       >
         <div className="flex items-center justify-between gap-2">
@@ -421,12 +421,12 @@ export default function Room() {
           </Button>
         </div>
         {!sidebarCollapsed && (
-          <div className="mt-3 space-y-2">
+          <div className="mt-3 space-y-2 flex-1 min-h-0 overflow-y-auto pr-1">
             <p className="text-xs text-muted-foreground">Troque de squad sem sair da sala.</p>
             {squads.length === 0 ? (
               <p className="text-xs text-muted-foreground">Sem squads disponíveis.</p>
             ) : (
-              <div className="space-y-1.5 max-h-72 overflow-auto pr-1">
+              <div className="space-y-1.5">
                 {squads.map((s) => (
                   <div
                     key={s.id}
