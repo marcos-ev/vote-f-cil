@@ -30,7 +30,9 @@ export function VoteStats({ participants }: VoteStatsProps) {
   revealedVotes.forEach((vote) => {
     counts.set(vote, (counts.get(vote) || 0) + 1);
   });
+  const maxCount = Math.max(...Array.from(counts.values()));
   const mostCommon = Array.from(counts.entries())
+    .filter(([, count]) => count === maxCount)
     .sort((a, b) => {
       if (b[1] !== a[1]) return b[1] - a[1];
       const aOrder = DECK.indexOf(a[0] as (typeof DECK)[number]);
