@@ -1,16 +1,20 @@
 import type { Participant } from '@/types/poker';
+import { DECK } from "@/types/poker";
+import { parseVoteNumeric } from "@/lib/vote-utils";
 
 interface VoteStatsProps {
   participants: Record<string, Participant>;
 }
 
 export function VoteStats({ participants }: VoteStatsProps) {
-  const votes = Object.values(participants)
-    .filter(p => p.hasVoted && p.vote !== null && p.vote !== '?' && p.vote !== '☕')
-    .map(p => Number(p.vote))
-    .filter(v => !Number.isNaN(v));
+  const revealedVotes = Object.values(participants)
+    .filter((p) => p.hasVoted && p.vote !== null)
+    .map((p) => p.vote as string);
+  const numericVotes = revealedVotes
+    .map((vote) => parseVoteNumeric(vote))
+    .filter((vote): vote is number => vote !== null);
 
-  if (votes.length === 0) {
+  if (numericVotes.length === 0) {
     return (
       <div className="text-center text-muted-foreground text-sm">
         Nenhum voto numérico para calcular estatísticas
@@ -18,18 +22,26 @@ export function VoteStats({ participants }: VoteStatsProps) {
     );
   }
 
-  const avg = votes.reduce((a, b) => a + b, 0) / votes.length;
-  const min = Math.min(...votes);
-  const max = Math.max(...votes);
+  const avg = numericVotes.reduce((a, b) => a + b, 0) / numericVotes.length;
+  const min = Math.min(...numericVotes);
+  const max = Math.max(...numericVotes);
 
-  // Most common
-  const freq: Record<number, number> = {};
-  votes.forEach(v => { freq[v] = (freq[v] || 0) + 1; });
-  const maxFreq = Math.max(...Object.values(freq));
-  const mostCommon = Object.entries(freq)
-    .filter(([, f]) => f === maxFreq)
-    .map(([v]) => v)
-    .join(', ');
+  const counts = new Map<string, number>();
+  revealedVotes.forEach((vote) => {
+    counts.set(vote, (counts.get(vote) || 0) + 1);
+  });
+  const mostCommon = Array.from(counts.entries())
+    .sort((a, b) => {
+      if (b[1] !== a[1]) return b[1] - a[1];
+      const aOrder = DECK.indexOf(a[0] as (typeof DECK)[number]);
+      const bOrder = DECK.indexOf(b[0] as (typeof DECK)[number]);
+      if (aOrder >= 0 && bOrder >= 0) return aOrder - bOrder;
+      if (aOrder >= 0) return -1;
+      if (bOrder >= 0) return 1;
+      return a[0].localeCompare(b[0]);
+    })
+    .map(([vote]) => vote)
+    .join(", ");
 
   const stats = [
     { label: 'Média', value: avg.toFixed(1) },

@@ -32,6 +32,7 @@ import { getCurrentFirebaseSession, logoutFirebase } from "@/lib/firebase-auth";
 import { clearAuthSession, getAuthSession } from "@/lib/auth-session";
 import { bindSquadRoom, resolveSquadRoomId, setLastSquadId } from "@/lib/squad-room";
 import { getOrCreateSessionId } from "@/lib/session";
+import { parseVoteNumeric } from "@/lib/vote-utils";
 
 const NAME_KEY = "poker-display-name";
 type Squad = {
@@ -130,9 +131,9 @@ export default function Room() {
 
   const numericVotes = useMemo(() => {
     return Object.values(participants)
-      .filter((p) => p.hasVoted && p.vote !== null && p.vote !== "?" && p.vote !== "☕")
-      .map((p) => Number(p.vote))
-      .filter((vote) => !Number.isNaN(vote));
+      .filter((p) => p.hasVoted && p.vote !== null)
+      .map((p) => parseVoteNumeric(p.vote as string))
+      .filter((vote): vote is number => vote !== null);
   }, [participants]);
 
   const mostVotedEstimate = useMemo(() => {
@@ -157,11 +158,29 @@ export default function Room() {
   const suggestedEstimate = useMemo(() => {
     if (numericVotes.length === 0) return null;
     const avg = numericVotes.reduce((a, b) => a + b, 0) / numericVotes.length;
-    const deckNums = [0, 1, 2, 3, 5, 8, 13, 100];
-    return String(
-      deckNums.reduce((prev, curr) => (Math.abs(curr - avg) < Math.abs(prev - avg) ? curr : prev)),
+    const deckCandidates = DECK.map((label) => ({ label, value: parseVoteNumeric(label) })).filter(
+      (item): item is { label: (typeof DECK)[number]; value: number } => item.value !== null,
     );
+    if (deckCandidates.length === 0) return null;
+    return deckCandidates.reduce((prev, curr) =>
+      Math.abs(curr.value - avg) < Math.abs(prev.value - avg) ? curr : prev,
+    ).label;
   }, [numericVotes]);
+
+  const finalSuggestedEstimate = useMemo(() => {
+    const votes = Object.values(participants)
+      .filter((p) => p.hasVoted && p.vote !== null)
+      .map((p) => p.vote as string);
+    if (votes.length === 0) return null;
+
+    const counts = new Map<string, number>();
+    votes.forEach((vote) => {
+      counts.set(vote, (counts.get(vote) || 0) + 1);
+    });
+    const allDifferent = Array.from(counts.values()).every((count) => count === 1);
+    if (allDifferent) return suggestedEstimate || mostVotedEstimate;
+    return mostVotedEstimate;
+  }, [mostVotedEstimate, participants, suggestedEstimate]);
 
   const sessionId = useMemo(() => getOrCreateSessionId(), []);
 
@@ -572,13 +591,13 @@ export default function Room() {
                         <SkipForward className="w-4 h-4" />
                         Limpar História Atual
                       </Button>
-                      {mostVotedEstimate && (
+                      {finalSuggestedEstimate && (
                         <Button
-                          onClick={() => confirmEstimate(mostVotedEstimate)}
+                          onClick={() => confirmEstimate(finalSuggestedEstimate)}
                           className="w-full sm:w-auto gap-1.5 font-semibold"
                         >
                           <CheckCircle2 className="w-4 h-4" />
-                          Confirmar Estimativa ({mostVotedEstimate})
+                          Confirmar Estimativa ({finalSuggestedEstimate})
                         </Button>
                       )}
                     </>

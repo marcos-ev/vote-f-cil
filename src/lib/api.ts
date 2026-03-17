@@ -17,6 +17,7 @@ import {
 import { DECK, type Role, type RoomState, type Squad, type StoryDetail } from "@/types/poker";
 import { getCurrentFirebaseSession } from "@/lib/firebase-auth";
 import { firebaseDb } from "@/lib/firebase";
+import { parseVoteNumeric } from "@/lib/vote-utils";
 
 export interface AuthUserResponse {
   id: string;
@@ -151,10 +152,7 @@ async function ensureInviteCodeIsFree(inviteCode: string) {
 }
 
 function getNumericStats(votes: string[]) {
-  const numeric = votes
-    .filter((v) => v !== "?" && v !== "☕")
-    .map((v) => Number(v))
-    .filter((n) => !Number.isNaN(n));
+  const numeric = votes.map((vote) => parseVoteNumeric(vote)).filter((value): value is number => value !== null);
   if (numeric.length === 0) {
     return { avg: null, min: null, max: null };
   }
@@ -185,6 +183,34 @@ function getMostVotedEstimate(votes: string[]) {
       if (bOrder !== undefined) return 1;
       return a[0].localeCompare(b[0]);
     })[0]?.[0] || null;
+}
+
+function getApproximateAverageEstimate(votes: string[]) {
+  const candidates = DECK.map((label) => ({ label, value: parseVoteNumeric(label) })).filter(
+    (item): item is { label: string; value: number } => item.value !== null,
+  );
+  const numeric = votes.map((vote) => parseVoteNumeric(vote)).filter((value): value is number => value !== null);
+  if (numeric.length === 0) return null;
+  if (candidates.length === 0) return null;
+
+  const avg = numeric.reduce((acc, cur) => acc + cur, 0) / numeric.length;
+  return candidates.reduce((prev, curr) =>
+    Math.abs(curr.value - avg) < Math.abs(prev.value - avg) ? curr : prev,
+  ).label;
+}
+
+function getFinalEstimateFromVotes(votes: string[]) {
+  if (votes.length === 0) return null;
+  const counts = new Map<string, number>();
+  votes.forEach((vote) => {
+    counts.set(vote, (counts.get(vote) || 0) + 1);
+  });
+  const allDifferent = Array.from(counts.values()).every((count) => count === 1);
+  if (allDifferent) {
+    const approximated = getApproximateAverageEstimate(votes);
+    if (approximated) return approximated;
+  }
+  return getMostVotedEstimate(votes);
 }
 
 function mapSquadsFromDocs(docs: Array<{ id: string; data: () => unknown }>, currentUserId: string): Squad[] {
@@ -552,7 +578,7 @@ export async function apiRoomAction(
       const votes = Object.values(participants)
         .filter((p) => p.hasVoted && p.vote !== null)
         .map((p) => p.vote as string);
-      const mostVotedEstimate = getMostVotedEstimate(votes);
+      const finalEstimate = getFinalEstimateFromVotes(votes);
       const stats = getNumericStats(votes);
       const details = Array.isArray(current.storyDetails) ? [...current.storyDetails] : [];
       const nextId = details.length > 0 ? Math.max(...details.map((d) => d.id)) + 1 : 1;
@@ -566,7 +592,7 @@ export async function apiRoomAction(
       details.push({
         id: nextId,
         storyName: current.storyName || "",
-        finalEstimate: mostVotedEstimate || input.finalEstimate || null,
+        finalEstimate: finalEstimate || input.finalEstimate || null,
         stats: {
           votesCount: votes.length,
           avg: stats.avg,
