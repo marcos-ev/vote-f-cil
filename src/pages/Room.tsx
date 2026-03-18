@@ -32,7 +32,7 @@ import { getCurrentFirebaseSession, logoutFirebase } from "@/lib/firebase-auth";
 import { clearAuthSession, getAuthSession } from "@/lib/auth-session";
 import { bindSquadRoom, resolveSquadRoomId, setLastSquadId } from "@/lib/squad-room";
 import { getOrCreateSessionId } from "@/lib/session";
-import { parseVoteNumeric } from "@/lib/vote-utils";
+import { filterNumericVoteLabels, parseVoteNumeric } from "@/lib/vote-utils";
 
 const NAME_KEY = "poker-display-name";
 type Squad = {
@@ -147,9 +147,11 @@ export default function Room() {
   }, [participants]);
 
   const mostVotedEstimate = useMemo(() => {
-    const votes = Object.values(participants)
+    const votes = filterNumericVoteLabels(
+      Object.values(participants)
       .filter((p) => p.hasVoted && p.vote !== null)
-      .map((p) => p.vote as string);
+      .map((p) => p.vote as string),
+    );
     if (votes.length === 0) return null;
 
     const counts = new Map<string, number>();
@@ -178,9 +180,11 @@ export default function Room() {
   }, [numericVotes]);
 
   const finalSuggestedEstimate = useMemo(() => {
-    const votes = Object.values(participants)
+    const votes = filterNumericVoteLabels(
+      Object.values(participants)
       .filter((p) => p.hasVoted && p.vote !== null)
-      .map((p) => p.vote as string);
+      .map((p) => p.vote as string),
+    );
     if (votes.length === 0) return null;
 
     const counts = new Map<string, number>();

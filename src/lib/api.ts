@@ -17,7 +17,7 @@ import {
 import { DECK, type Role, type RoomState, type Squad, type StoryDetail } from "@/types/poker";
 import { getCurrentFirebaseSession } from "@/lib/firebase-auth";
 import { firebaseDb } from "@/lib/firebase";
-import { parseVoteNumeric } from "@/lib/vote-utils";
+import { filterNumericVoteLabels, parseVoteNumeric } from "@/lib/vote-utils";
 
 export interface AuthUserResponse {
   id: string;
@@ -165,10 +165,11 @@ function getNumericStats(votes: string[]) {
 }
 
 function getMostVotedEstimate(votes: string[]) {
-  if (votes.length === 0) return null;
+  const numericVotes = filterNumericVoteLabels(votes);
+  if (numericVotes.length === 0) return null;
 
   const counts = new Map<string, number>();
-  votes.forEach((vote) => {
+  numericVotes.forEach((vote) => {
     counts.set(vote, (counts.get(vote) || 0) + 1);
   });
 
@@ -200,17 +201,18 @@ function getApproximateAverageEstimate(votes: string[]) {
 }
 
 function getFinalEstimateFromVotes(votes: string[]) {
-  if (votes.length === 0) return null;
+  const numericVotes = filterNumericVoteLabels(votes);
+  if (numericVotes.length === 0) return null;
   const counts = new Map<string, number>();
-  votes.forEach((vote) => {
+  numericVotes.forEach((vote) => {
     counts.set(vote, (counts.get(vote) || 0) + 1);
   });
   const allDifferent = Array.from(counts.values()).every((count) => count === 1);
   if (allDifferent) {
-    const approximated = getApproximateAverageEstimate(votes);
+    const approximated = getApproximateAverageEstimate(numericVotes);
     if (approximated) return approximated;
   }
-  return getMostVotedEstimate(votes);
+  return getMostVotedEstimate(numericVotes);
 }
 
 function mapSquadsFromDocs(docs: Array<{ id: string; data: () => unknown }>, currentUserId: string): Squad[] {
@@ -578,6 +580,7 @@ export async function apiRoomAction(
       const votes = Object.values(participants)
         .filter((p) => p.hasVoted && p.vote !== null)
         .map((p) => p.vote as string);
+      const numericVotes = filterNumericVoteLabels(votes);
       const finalEstimate = getFinalEstimateFromVotes(votes);
       const stats = getNumericStats(votes);
       const details = Array.isArray(current.storyDetails) ? [...current.storyDetails] : [];
@@ -594,7 +597,7 @@ export async function apiRoomAction(
         storyName: current.storyName || "",
         finalEstimate: finalEstimate || input.finalEstimate || null,
         stats: {
-          votesCount: votes.length,
+          votesCount: numericVotes.length,
           avg: stats.avg,
           min: stats.min,
           max: stats.max,

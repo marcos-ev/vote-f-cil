@@ -7,3 +7,11 @@ export function parseVoteNumeric(vote: string | null | undefined): number | null
   const parsed = Number(match[0]);
   return Number.isNaN(parsed) ? null : parsed;
 }
+
+export function isNumericVote(vote: string | null | undefined): vote is string {
+  return parseVoteNumeric(vote) !== null;
+}
+
+export function filterNumericVoteLabels(votes: string[]) {
+  return votes.filter((vote) => isNumericVote(vote));
+}

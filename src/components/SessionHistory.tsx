@@ -4,6 +4,7 @@ import { Download, History } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { apiGetRoomStories } from "@/lib/api";
+import { getEstimatedHoursLabel } from "@/lib/estimate-hours";
 
 interface SessionHistoryProps {
   history: Story[];
@@ -38,8 +39,10 @@ export function SessionHistory({ history, roomId }: SessionHistoryProps) {
   }, [details, selected]);
 
   const exportCsv = () => {
-    const header = "História,Estimativa Final\n";
-    const rows = history.map((s) => `"${s.name}","${s.finalEstimate ?? ""}"`).join("\n");
+    const header = "História,Estimativa Final,Horas Estimadas\n";
+    const rows = history
+      .map((s) => `"${s.name}","${s.finalEstimate ?? ""}","${getEstimatedHoursLabel(s.finalEstimate)}"`)
+      .join("\n");
     const blob = new Blob([header + rows], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -72,9 +75,14 @@ export function SessionHistory({ history, roomId }: SessionHistoryProps) {
             className="w-full text-left flex flex-col gap-1 rounded-md bg-secondary/50 px-3 py-2 hover:bg-secondary sm:flex-row sm:items-center sm:justify-between"
           >
             <span className="mr-2 text-sm break-words">{s.name}</span>
-            <span className="font-mono font-bold text-primary dark:text-foreground text-sm sm:flex-shrink-0">
-              {s.finalEstimate}
-            </span>
+            <div className="text-right sm:flex-shrink-0">
+              <span className="font-mono font-bold text-primary dark:text-foreground text-sm block">
+                {s.finalEstimate}
+              </span>
+              <span className="text-[11px] text-muted-foreground">
+                {getEstimatedHoursLabel(s.finalEstimate)}
+              </span>
+            </div>
           </button>
         ))}
       </div>
@@ -106,6 +114,10 @@ export function SessionHistory({ history, roomId }: SessionHistoryProps) {
                 <div className="text-sm">
                   {selectedDetail ? new Date(selectedDetail.finalizedAt).toLocaleString() : "Sem data detalhada"}
                 </div>
+              </div>
+              <div className="rounded-md border border-border p-3 bg-secondary/20 col-span-2">
+                <div className="text-xs text-muted-foreground">Horas estimadas</div>
+                <div className="text-sm font-medium">{getEstimatedHoursLabel(selected?.finalEstimate)}</div>
               </div>
             </div>
 
