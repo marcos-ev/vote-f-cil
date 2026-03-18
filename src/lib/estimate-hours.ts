@@ -1,12 +1,12 @@
 const ESTIMATE_HOURS_MAP: Record<string, string> = {
   "0": "0h (0d)",
-  "1": "1h (0,125d)",
-  "2": "2h (0,25d)",
-  "3": "3h (0,375d)",
-  "5": "5h (0,625d)",
-  "8": "8h (1d)",
-  "13": "13h (1,625d)",
-  "20+": "20h+ (2,5d+)",
+  "1": "até 2h (0,25d)",
+  "2": "até 6h (0,75d)",
+  "3": "8h (1d)",
+  "5": "até 16h (2d)",
+  "8": "até 24h (3d)",
+  "13": "até 40h (5d)",
+  "20+": "acima de 40h (5d+)",
 };
 
 export function getEstimatedHoursByPoints(points: string | null | undefined) {
