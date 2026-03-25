@@ -1,5 +1,6 @@
 export interface Participant {
   id: string;
+  userId?: string;
   name: string;
   role: "moderator" | "player";
   vote: string | null;
@@ -51,6 +52,7 @@ export interface Squad {
   name: string;
   invite_code: string;
   ownerUserId?: string;
+  memberUserIds?: string[];
   canDelete?: boolean;
 }
 

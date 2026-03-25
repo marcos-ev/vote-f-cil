@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Story, StoryDetail } from "@/types/poker";
-import { Download, History } from "lucide-react";
+import { Check, Copy, Download, History } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { apiGetRoomStories } from "@/lib/api";
-import { getEstimatedHoursLabel } from "@/lib/estimate-hours";
+import { getEstimatedHoursLabel, getEstimatedHoursOnlyLabel } from "@/lib/estimate-hours";
 
 interface SessionHistoryProps {
   history: Story[];
@@ -14,6 +14,10 @@ interface SessionHistoryProps {
 export function SessionHistory({ history, roomId }: SessionHistoryProps) {
   const [details, setDetails] = useState<StoryDetail[]>([]);
   const [selected, setSelected] = useState<Story | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  // Mostra as histórias mais recentes primeiro (UI do "Histórico da Sessão").
+  const orderedHistory = useMemo(() => [...history].reverse(), [history]);
 
   useEffect(() => {
     if (!roomId || history.length === 0) {
@@ -40,7 +44,7 @@ export function SessionHistory({ history, roomId }: SessionHistoryProps) {
 
   const exportCsv = () => {
     const header = "História,Estimativa Final,Horas Estimadas\n";
-    const rows = history
+    const rows = orderedHistory
       .map((s) => `"${s.name}","${s.finalEstimate ?? ""}","${getEstimatedHoursLabel(s.finalEstimate)}"`)
       .join("\n");
     const blob = new Blob([header + rows], { type: "text/csv;charset=utf-8;" });
@@ -50,6 +54,15 @@ export function SessionHistory({ history, roomId }: SessionHistoryProps) {
     a.download = `planning-poker-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const copyRefinementText = (story: Story, key: string) => {
+    const hours = getEstimatedHoursOnlyLabel(story.finalEstimate);
+    const points = story.finalEstimate ?? "-";
+    const text = `Realizado refinamento com estimativas de ${points} pontos (${hours})`;
+    void navigator.clipboard.writeText(text);
+    setCopiedKey(key);
+    window.setTimeout(() => setCopiedKey((current) => (current === key ? null : current)), 1200);
   };
 
   if (history.length === 0) return null;
@@ -67,15 +80,32 @@ export function SessionHistory({ history, roomId }: SessionHistoryProps) {
         </Button>
       </div>
       <div className="space-y-2">
-        {history.map((s, i) => (
+        {orderedHistory.map((s, i) => (
           <button
-            key={`${s.id ?? "legacy"}-${i}`}
+            // Como a lista é invertida, usamos o índice original para manter a `key` estável
+            // quando histórias novas são adicionadas ao final.
+            key={`${s.id ?? "legacy"}-${history.length - 1 - i}`}
             type="button"
             onClick={() => setSelected(s)}
             className="w-full text-left flex flex-col gap-1 rounded-md bg-secondary/50 px-3 py-2 hover:bg-secondary sm:flex-row sm:items-center sm:justify-between"
           >
             <span className="mr-2 text-sm break-words">{s.name}</span>
-            <div className="text-right sm:flex-shrink-0">
+            <div className="text-right sm:flex-shrink-0 relative pr-7">
+              <button
+                type="button"
+                aria-label="Copiar texto de refinamento"
+                className="absolute right-0 top-0 p-1 rounded hover:bg-background/70 transition-colors"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  copyRefinementText(s, `${s.id ?? "legacy"}-${i}`);
+                }}
+              >
+                {copiedKey === `${s.id ?? "legacy"}-${i}` ? (
+                  <Check className="w-3.5 h-3.5" />
+                ) : (
+                  <Copy className="w-3.5 h-3.5" />
+                )}
+              </button>
               <span className="font-mono font-bold text-primary dark:text-foreground text-sm block">
                 {s.finalEstimate}
               </span>
@@ -116,7 +146,24 @@ export function SessionHistory({ history, roomId }: SessionHistoryProps) {
                 </div>
               </div>
               <div className="rounded-md border border-border p-3 bg-secondary/20 col-span-2">
-                <div className="text-xs text-muted-foreground">Horas estimadas</div>
+                <div className="text-xs text-muted-foreground flex items-center justify-between gap-2">
+                  <span>Horas estimadas</span>
+                  <button
+                    type="button"
+                    aria-label="Copiar texto de refinamento"
+                    className="p-1 rounded hover:bg-background/70 transition-colors"
+                    onClick={() => {
+                      if (!selected) return;
+                      copyRefinementText(selected, `detail-${selected.id ?? selected.name}`);
+                    }}
+                  >
+                    {copiedKey === `detail-${selected?.id ?? selected?.name}` ? (
+                      <Check className="w-3.5 h-3.5" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+                </div>
                 <div className="text-sm font-medium">{getEstimatedHoursLabel(selected?.finalEstimate)}</div>
               </div>
             </div>

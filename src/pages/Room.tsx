@@ -27,7 +27,7 @@ import { AccountMenu } from "@/components/account-menu";
 import { brandAssets } from "@/lib/branding";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { apiDeleteSquad, subscribeSquads } from "@/lib/api";
+import { apiDeleteSquad, apiRemoveSquadMember, subscribeSquads } from "@/lib/api";
 import { getCurrentFirebaseSession, logoutFirebase } from "@/lib/firebase-auth";
 import { clearAuthSession, getAuthSession } from "@/lib/auth-session";
 import { bindSquadRoom, resolveSquadRoomId, setLastSquadId } from "@/lib/squad-room";
@@ -40,6 +40,7 @@ type Squad = {
   name: string;
   invite_code: string;
   ownerUserId?: string;
+  memberUserIds?: string[];
   canDelete?: boolean;
 };
 
@@ -97,6 +98,7 @@ export default function Room() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [deletingSquadId, setDeletingSquadId] = useState("");
   const [squadToDelete, setSquadToDelete] = useState<Squad | null>(null);
+  const [removingUserId, setRemovingUserId] = useState("");
   const [authChecked, setAuthChecked] = useState(false);
   const [transferTargetId, setTransferTargetId] = useState("");
   const renderCountRef = useRef(0);
@@ -134,10 +136,22 @@ export default function Room() {
     [participants],
   );
   const canTransferResponsibility = isModerator;
+  const currentSquad = useMemo(() => squads.find((squad) => squad.id === squadId) || null, [squadId, squads]);
+  const isSquadOwner = useMemo(() => Boolean(currentSquad?.canDelete), [currentSquad?.canDelete]);
   const transferCandidates = useMemo(
     () => participantList.filter((participant) => participant.role !== "moderator"),
     [participantList],
   );
+  const removableMembers = useMemo(() => {
+    const ownerId = currentSquad?.ownerUserId || "";
+    const members = (currentSquad?.memberUserIds || []).filter((userId) => userId && userId !== ownerId);
+    const unique = Array.from(new Set(members));
+    return unique.map((userId) => {
+      const participant = Object.values(participants).find((p) => p.userId === userId);
+      const label = participant ? `${participant.name} (${userId.slice(0, 8)})` : `Usuário ${userId.slice(0, 8)}`;
+      return { userId, label, online: Boolean(participant) };
+    });
+  }, [currentSquad?.memberUserIds, currentSquad?.ownerUserId, participants]);
 
   const numericVotes = useMemo(() => {
     return Object.values(participants)
@@ -340,6 +354,24 @@ export default function Room() {
       setSquadToDelete(null);
     }
   };
+  const removeMemberFromSquad = async (targetUserId: string) => {
+    if (!squadId || !targetUserId) return;
+    setRemovingUserId(targetUserId);
+    try {
+      await apiRemoveSquadMember(squadId, targetUserId);
+      toast.success("Membro removido da squad.");
+    } catch (error: unknown) {
+      toast.error(getApiErrorMessage(error, "Falha ao remover membro."));
+    } finally {
+      setRemovingUserId("");
+    }
+  };
+
+  const canOwnerRemoveParticipant = (participant: { userId?: string }) =>
+    isSquadOwner &&
+    Boolean(squadId) &&
+    Boolean(participant.userId) &&
+    participant.userId !== currentSquad?.ownerUserId;
 
   const handleCopyLink = () => {
     const params = new URLSearchParams();
@@ -581,7 +613,16 @@ export default function Room() {
                 <h3 className="text-sm font-medium mb-3">Participantes</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                   {participantList.map((p) => (
-                    <ParticipantCard key={p.id} participant={p} isRevealed={isRevealed} />
+                    <ParticipantCard
+                      key={p.id}
+                      participant={p}
+                      isRevealed={isRevealed}
+                      canRemove={canOwnerRemoveParticipant(p)}
+                      onRemove={() => {
+                        if (!p.userId) return;
+                        void removeMemberFromSquad(p.userId);
+                      }}
+                    />
                   ))}
                 </div>
               </div>
@@ -648,6 +689,37 @@ export default function Room() {
                       Transferir
                     </Button>
                   </div>
+                </div>
+              )}
+              {isSquadOwner && squadId && (
+                <div className="bg-card rounded-xl border border-border p-4 sm:p-5 space-y-2">
+                  <h3 className="text-sm font-medium">Membros da squad</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Como owner, você pode remover membros da squad e eles somem da sala de votação.
+                  </p>
+                  {removableMembers.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">Sem membros removíveis no momento.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {removableMembers.map((member) => (
+                        <div key={member.userId} className="flex items-center justify-between rounded-md bg-secondary/40 px-3 py-2">
+                          <div className="text-sm">
+                            <span>{member.label}</span>
+                            <span className="ml-2 text-xs text-muted-foreground">{member.online ? "online" : "offline"}</span>
+                          </div>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => removeMemberFromSquad(member.userId)}
+                            disabled={removingUserId === member.userId}
+                            className="text-destructive hover:text-destructive"
+                          >
+                            {removingUserId === member.userId ? "Removendo..." : "Remover"}
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 

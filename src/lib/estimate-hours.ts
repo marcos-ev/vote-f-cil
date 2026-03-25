@@ -17,3 +17,9 @@ export function getEstimatedHoursByPoints(points: string | null | undefined) {
 export function getEstimatedHoursLabel(points: string | null | undefined) {
   return getEstimatedHoursByPoints(points) || "Sem estimativa em horas";
 }
+
+export function getEstimatedHoursOnlyLabel(points: string | null | undefined) {
+  const full = getEstimatedHoursByPoints(points);
+  if (!full) return "Sem estimativa em horas";
+  return full.replace(/\s*\([^)]*\)\s*$/, "").trim();
+}

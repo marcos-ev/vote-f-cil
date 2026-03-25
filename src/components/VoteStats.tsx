@@ -1,13 +1,16 @@
+import { useState } from "react";
 import type { Participant } from '@/types/poker';
 import { DECK } from "@/types/poker";
+import { Check, Copy } from "lucide-react";
 import { filterNumericVoteLabels, parseVoteNumeric } from "@/lib/vote-utils";
-import { getEstimatedHoursByPoints } from "@/lib/estimate-hours";
+import { getEstimatedHoursByPoints, getEstimatedHoursOnlyLabel } from "@/lib/estimate-hours";
 
 interface VoteStatsProps {
   participants: Record<string, Participant>;
 }
 
 export function VoteStats({ participants }: VoteStatsProps) {
+  const [copied, setCopied] = useState(false);
   const revealedVotes = Object.values(participants)
     .filter((p) => p.hasVoted && p.vote !== null)
     .map((p) => p.vote as string);
@@ -50,6 +53,11 @@ export function VoteStats({ participants }: VoteStatsProps) {
     .map((vote) => getEstimatedHoursByPoints(vote))
     .filter((hours): hours is string => Boolean(hours))
     .join(" / ");
+  const copyHours = mostCommonVotes
+    .map((vote) => getEstimatedHoursOnlyLabel(vote))
+    .filter((hours): hours is string => Boolean(hours))
+    .join(" / ");
+  const copyText = `Realizado refinamento com estimativas de ${mostCommon} pontos (${copyHours || "-"})`;
 
   const stats = [
     { label: 'Média', value: avg.toFixed(1) },
@@ -61,8 +69,22 @@ export function VoteStats({ participants }: VoteStatsProps) {
 
   return (
     <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-      {stats.map(s => (
-        <div key={s.label} className="bg-secondary rounded-lg p-3 text-center">
+      {stats.map((s) => (
+        <div key={s.label} className="bg-secondary rounded-lg p-3 text-center relative">
+          {s.label === "Horas estimadas" && (
+            <button
+              type="button"
+              aria-label="Copiar texto de refinamento"
+              className="absolute right-2 top-2 p-1 rounded hover:bg-background/70 transition-colors"
+              onClick={() => {
+                void navigator.clipboard.writeText(copyText);
+                setCopied(true);
+                window.setTimeout(() => setCopied(false), 1200);
+              }}
+            >
+              {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+            </button>
+          )}
           <div className="text-xs text-muted-foreground mb-1">{s.label}</div>
           <div className="text-lg sm:text-xl font-mono font-bold text-primary dark:text-foreground break-words">
             {s.value}

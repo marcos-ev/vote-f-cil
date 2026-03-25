@@ -58,6 +58,7 @@ type FirestoreSquad = {
   invite_code: string;
   ownerUserId: string;
   memberUserIds: string[];
+  blockedUserIds?: string[];
   createdAt: number;
   updatedAt: number;
 };
@@ -66,6 +67,7 @@ type SquadAccess = {
   squadId: string;
   ownerUserId: string;
   memberUserIds: string[];
+  blockedUserIds: string[];
 };
 
 const DEFAULT_ROOM: Omit<FirestoreRoom, "updatedAt"> = {
@@ -96,6 +98,7 @@ function normalizeRoomState(roomId: string, data?: Partial<FirestoreRoom>): Room
       id,
       {
         id: p.id,
+        userId: (p as { userId?: string }).userId,
         name: p.name,
         role: p.role,
         vote: p.vote ?? null,
@@ -224,6 +227,7 @@ function mapSquadsFromDocs(docs: Array<{ id: string; data: () => unknown }>, cur
       name: item.name,
       invite_code: item.invite_code,
       ownerUserId: item.ownerUserId,
+      memberUserIds: Array.isArray(item.memberUserIds) ? item.memberUserIds : [],
       canDelete: item.ownerUserId === currentUserId,
     }));
 }
@@ -309,6 +313,7 @@ export async function apiCreateSquad(input: { name: string; createdByName: strin
     invite_code: inviteCode,
     ownerUserId: session.user.id,
     memberUserIds: [session.user.id],
+    blockedUserIds: [],
     createdAt: now,
     updatedAt: now,
   };
@@ -320,6 +325,7 @@ export async function apiCreateSquad(input: { name: string; createdByName: strin
       name: squadName,
       invite_code: inviteCode,
       ownerUserId: session.user.id,
+      memberUserIds: [session.user.id],
       canDelete: true,
     },
   };
@@ -346,6 +352,7 @@ export async function apiJoinSquad(input: { inviteCode: string; userName: string
       name: squad.name,
       invite_code: squad.invite_code,
       ownerUserId: squad.ownerUserId,
+      memberUserIds: Array.isArray(squad.memberUserIds) ? squad.memberUserIds : [],
       canDelete: squad.ownerUserId === session.user.id,
     },
   };
@@ -362,6 +369,70 @@ export async function apiDeleteSquad(squadId: string, ownerSessionId: string) {
     throw new Error("Apenas o dono da squad pode apagar.");
   }
   await deleteDoc(ref);
+  return { ok: true };
+}
+
+export async function apiRemoveSquadMember(squadId: string, targetUserId: string) {
+  const session = await getRequiredSession();
+  const normalizedTarget = String(targetUserId || "").trim();
+  if (!normalizedTarget) throw new Error("Usuário inválido.");
+
+  const squadRef = doc(firebaseDb, "squads", squadId);
+  await runTransaction(firebaseDb, async (tx) => {
+    const squadSnap = await tx.get(squadRef);
+    if (!squadSnap.exists()) throw new Error("squad não encontrada");
+    const squad = squadSnap.data() as FirestoreSquad;
+    if (squad.ownerUserId !== session.user.id) {
+      throw new Error("Apenas o owner da squad pode remover membros.");
+    }
+    if (normalizedTarget === squad.ownerUserId) {
+      throw new Error("O owner não pode ser removido da própria squad.");
+    }
+    const memberUserIds = Array.isArray(squad.memberUserIds) ? squad.memberUserIds : [];
+    const blockedUserIds = Array.isArray(squad.blockedUserIds) ? squad.blockedUserIds : [];
+    tx.update(squadRef, {
+      memberUserIds: memberUserIds.filter((id) => id !== normalizedTarget),
+      blockedUserIds: Array.from(new Set([...blockedUserIds, normalizedTarget])),
+      updatedAt: Date.now(),
+    });
+  });
+
+  const roomsSnap = await getDocs(query(collection(firebaseDb, "rooms"), where("squadId", "==", squadId)));
+  for (const roomDoc of roomsSnap.docs) {
+    const room = asRoomData(roomDoc.data());
+    const participants = { ...(room.participants || {}) };
+    let changed = false;
+    Object.keys(participants).forEach((participantId) => {
+      if (participants[participantId]?.userId === normalizedTarget) {
+        delete participants[participantId];
+        changed = true;
+      }
+    });
+    if (!changed) continue;
+
+    let controllerUserId = room.controllerUserId;
+    let controllerParticipantId = room.controllerParticipantId;
+    if (controllerUserId === normalizedTarget) {
+      controllerUserId = null;
+      controllerParticipantId = null;
+    }
+    Object.keys(participants).forEach((participantId) => {
+      const participant = participants[participantId];
+      if (controllerUserId && participant.userId === controllerUserId) {
+        participants[participantId] = { ...participant, role: "moderator", lastSeen: Date.now() };
+        controllerParticipantId = participantId;
+      } else {
+        participants[participantId] = { ...participant, role: "player", lastSeen: Date.now() };
+      }
+    });
+
+    await updateDoc(roomDoc.ref, {
+      participants,
+      controllerUserId,
+      controllerParticipantId,
+      updatedAt: Date.now(),
+    });
+  }
   return { ok: true };
 }
 
@@ -413,7 +484,11 @@ export async function apiUpsertPresence(
         squadId: effectiveSquadId,
         ownerUserId: squadData.ownerUserId,
         memberUserIds: Array.isArray(squadData.memberUserIds) ? squadData.memberUserIds : [],
+        blockedUserIds: Array.isArray(squadData.blockedUserIds) ? squadData.blockedUserIds : [],
       };
+      if (squadAccess.blockedUserIds.includes(session.user.id)) {
+        throw new Error("Você foi removido desta squad e não pode participar desta sala.");
+      }
     }
 
     let controllerUserId = current.controllerUserId;
@@ -512,6 +587,7 @@ export async function apiRoomAction(
         squadId: current.squadId,
         ownerUserId: squadData.ownerUserId,
         memberUserIds: Array.isArray(squadData.memberUserIds) ? squadData.memberUserIds : [],
+        blockedUserIds: Array.isArray(squadData.blockedUserIds) ? squadData.blockedUserIds : [],
       };
     }
     const isCurrentResponsible = Boolean(current.controllerUserId && session.user.id === current.controllerUserId);

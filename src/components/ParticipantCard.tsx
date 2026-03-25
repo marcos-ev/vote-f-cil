@@ -1,19 +1,35 @@
 import { cn } from '@/lib/utils';
-import { Check, Clock, Crown } from 'lucide-react';
+import { Check, Clock, Crown, X } from 'lucide-react';
 import type { Participant } from '@/types/poker';
 
 interface ParticipantCardProps {
   participant: Participant;
   isRevealed: boolean;
+  canRemove?: boolean;
+  onRemove?: () => void;
 }
 
-export function ParticipantCard({ participant, isRevealed }: ParticipantCardProps) {
+export function ParticipantCard({ participant, isRevealed, canRemove, onRemove }: ParticipantCardProps) {
   const { name, role, vote, hasVoted } = participant;
 
   return (
     <div className="flex items-center gap-3">
       {/* Mini card */}
-      <div className="perspective-500" style={{ perspective: '500px' }}>
+      <div className="perspective-500 relative" style={{ perspective: '500px' }}>
+        {canRemove && (
+          <button
+            type="button"
+            aria-label="Remover participante da votação"
+            className="absolute right-1 top-1 z-10 rounded-full bg-background/80 border border-border p-0.5 hover:bg-background"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onRemove?.();
+            }}
+          >
+            <X className="w-2.5 h-2.5 text-destructive" />
+          </button>
+        )}
         <div className={cn('card-inner w-12 h-16 sm:w-14 sm:h-20', isRevealed && hasVoted && 'flipped')}>
           {/* Back of card (shown by default) */}
           <div
