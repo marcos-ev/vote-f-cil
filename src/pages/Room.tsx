@@ -118,6 +118,7 @@ export default function Room() {
     myId,
     myVote,
     isModerator,
+    isInRoom,
     castVote,
     startVote,
     revealVotes,
@@ -327,6 +328,13 @@ export default function Room() {
       navigate("/");
     }
   }, [authChecked, navigate, squadId, squads, squadsSynced]);
+
+  useEffect(() => {
+    if (!authChecked || !entered || !connected) return;
+    if (isInRoom) return;
+    toast.error("Você foi removido da votação.");
+    navigate("/", { replace: true });
+  }, [authChecked, connected, entered, isInRoom, navigate]);
 
   useEffect(() => {
     if (!canTransferResponsibility) {

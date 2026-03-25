@@ -56,6 +56,8 @@ export function useRoom(roomId: string, userName: string, enabled = true, squadI
   const myId = useRef(generateId());
   const [connected, setConnected] = useState(false);
   const [roomState, setRoomState] = useState<RoomState>(() => emptyRoomState(roomId));
+  const heartbeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const hasBeenInRoomRef = useRef(false);
 
   useEffect(() => {
     if (!roomId) return;
@@ -156,11 +158,12 @@ export function useRoom(roomId: string, userName: string, enabled = true, squadI
     void upsertPresence(undefined, undefined).catch((error) => {
       toast.error(`Falha ao entrar na sala. ${getErrorMessage(error, "Tente novamente.")}`);
     });
-    const heartbeat = setInterval(() => {
+    heartbeatIntervalRef.current = setInterval(() => {
       void upsertPresence(undefined, undefined).catch(() => undefined);
     }, 10000);
     return () => {
-      clearInterval(heartbeat);
+      if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
+      heartbeatIntervalRef.current = null;
       void apiLeaveRoom(roomId, myId.current).catch(() => undefined);
     };
   }, [enabled, roomId, upsertPresence, userName]);
@@ -228,6 +231,23 @@ export function useRoom(roomId: string, userName: string, enabled = true, squadI
 
   const myVote = roomState.participants[myId.current]?.vote ?? null;
   const isModerator = roomState.participants[myId.current]?.role === "moderator";
+  const isInRoom = Boolean(roomState.participants[myId.current]);
+
+  useEffect(() => {
+    if (!enabled || !roomId || !userName) return;
+    if (isInRoom) {
+      hasBeenInRoomRef.current = true;
+      return;
+    }
+    if (!connected) return;
+    if (!hasBeenInRoomRef.current) return;
+
+    // Quando o owner remove o usuário da sala/votação, precisamos parar o heartbeat
+    // para não "reentrar" automaticamente no mesmo link/sessão.
+    if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
+    heartbeatIntervalRef.current = null;
+    void apiLeaveRoom(roomId, myId.current).catch(() => undefined);
+  }, [enabled, roomId, userName, isInRoom, connected]);
 
   return {
     participants: roomState.participants,
@@ -239,6 +259,7 @@ export function useRoom(roomId: string, userName: string, enabled = true, squadI
     myId: myId.current,
     myVote,
     isModerator,
+    isInRoom,
     castVote,
     startVote,
     revealVotes,
