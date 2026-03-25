@@ -58,7 +58,6 @@ type FirestoreSquad = {
   invite_code: string;
   ownerUserId: string;
   memberUserIds: string[];
-  blockedUserIds?: string[];
   createdAt: number;
   updatedAt: number;
 };
@@ -67,7 +66,6 @@ type SquadAccess = {
   squadId: string;
   ownerUserId: string;
   memberUserIds: string[];
-  blockedUserIds: string[];
 };
 
 const DEFAULT_ROOM: Omit<FirestoreRoom, "updatedAt"> = {
@@ -313,7 +311,6 @@ export async function apiCreateSquad(input: { name: string; createdByName: strin
     invite_code: inviteCode,
     ownerUserId: session.user.id,
     memberUserIds: [session.user.id],
-    blockedUserIds: [],
     createdAt: now,
     updatedAt: now,
   };
@@ -389,10 +386,8 @@ export async function apiRemoveSquadMember(squadId: string, targetUserId: string
       throw new Error("O owner não pode ser removido da própria squad.");
     }
     const memberUserIds = Array.isArray(squad.memberUserIds) ? squad.memberUserIds : [];
-    const blockedUserIds = Array.isArray(squad.blockedUserIds) ? squad.blockedUserIds : [];
     tx.update(squadRef, {
       memberUserIds: memberUserIds.filter((id) => id !== normalizedTarget),
-      blockedUserIds: Array.from(new Set([...blockedUserIds, normalizedTarget])),
       updatedAt: Date.now(),
     });
   });
@@ -484,11 +479,7 @@ export async function apiUpsertPresence(
         squadId: effectiveSquadId,
         ownerUserId: squadData.ownerUserId,
         memberUserIds: Array.isArray(squadData.memberUserIds) ? squadData.memberUserIds : [],
-        blockedUserIds: Array.isArray(squadData.blockedUserIds) ? squadData.blockedUserIds : [],
       };
-      if (squadAccess.blockedUserIds.includes(session.user.id)) {
-        throw new Error("Você foi removido desta squad e não pode participar desta sala.");
-      }
     }
 
     let controllerUserId = current.controllerUserId;
@@ -587,7 +578,6 @@ export async function apiRoomAction(
         squadId: current.squadId,
         ownerUserId: squadData.ownerUserId,
         memberUserIds: Array.isArray(squadData.memberUserIds) ? squadData.memberUserIds : [],
-        blockedUserIds: Array.isArray(squadData.blockedUserIds) ? squadData.blockedUserIds : [],
       };
     }
     const isCurrentResponsible = Boolean(current.controllerUserId && session.user.id === current.controllerUserId);
