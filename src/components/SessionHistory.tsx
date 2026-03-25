@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { apiGetRoomStories } from "@/lib/api";
 import { getEstimatedHoursLabel, getEstimatedHoursOnlyLabel } from "@/lib/estimate-hours";
+import { toast } from "sonner";
 
 interface SessionHistoryProps {
   history: Story[];
@@ -62,6 +63,7 @@ export function SessionHistory({ history, roomId }: SessionHistoryProps) {
     const text = `Realizado refinamento com estimativas de ${points} pontos (${hours})`;
     void navigator.clipboard.writeText(text);
     setCopiedKey(key);
+    toast.success("Estimativa copiada");
     window.setTimeout(() => setCopiedKey((current) => (current === key ? null : current)), 1200);
   };
 
