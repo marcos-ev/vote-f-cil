@@ -24,6 +24,7 @@ import { SessionHistory } from "@/components/SessionHistory";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { DeleteSquadDialog } from "@/components/delete-squad-dialog";
 import { AccountMenu } from "@/components/account-menu";
+import { RemoveMemberDialog } from "@/components/remove-member-dialog";
 import { brandAssets } from "@/lib/branding";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -99,6 +100,9 @@ export default function Room() {
   const [deletingSquadId, setDeletingSquadId] = useState("");
   const [squadToDelete, setSquadToDelete] = useState<Squad | null>(null);
   const [removingUserId, setRemovingUserId] = useState("");
+  const [removeMemberDialogOpen, setRemoveMemberDialogOpen] = useState(false);
+  const [removeMemberLabel, setRemoveMemberLabel] = useState("");
+  const [removeMemberUserId, setRemoveMemberUserId] = useState<string | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [transferTargetId, setTransferTargetId] = useState("");
   const renderCountRef = useRef(0);
@@ -354,15 +358,8 @@ export default function Room() {
       setSquadToDelete(null);
     }
   };
-  const removeMemberFromSquad = async (targetUserId: string, targetLabel?: string) => {
+  const removeMemberFromSquad = async (targetUserId: string) => {
     if (!squadId || !targetUserId) return;
-
-    const label = targetLabel || targetUserId.slice(0, 8);
-    const confirmed = window.confirm(
-      `Tem certeza que deseja remover "${label}" da squad?\n\nEle/ela será removido(a) da sala de votação e não conseguirá entrar novamente nesta squad.`,
-    );
-    if (!confirmed) return;
-
     setRemovingUserId(targetUserId);
     try {
       await apiRemoveSquadMember(squadId, targetUserId);
@@ -627,7 +624,9 @@ export default function Room() {
                       canRemove={canOwnerRemoveParticipant(p)}
                       onRemove={() => {
                         if (!p.userId) return;
-                        void removeMemberFromSquad(p.userId, p.name);
+                        setRemoveMemberUserId(p.userId);
+                        setRemoveMemberLabel(p.name);
+                        setRemoveMemberDialogOpen(true);
                       }}
                     />
                   ))}
@@ -717,7 +716,11 @@ export default function Room() {
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => removeMemberFromSquad(member.userId, member.label)}
+                            onClick={() => {
+                              setRemoveMemberUserId(member.userId);
+                              setRemoveMemberLabel(member.label);
+                              setRemoveMemberDialogOpen(true);
+                            }}
                             disabled={removingUserId === member.userId}
                             className="text-destructive hover:text-destructive"
                           >
@@ -773,6 +776,25 @@ export default function Room() {
         onConfirm={async () => {
           if (!squadToDelete) return;
           await deleteSquad(squadToDelete);
+        }}
+      />
+      <RemoveMemberDialog
+        open={removeMemberDialogOpen}
+        memberLabel={removeMemberLabel}
+        isRemoving={Boolean(removeMemberUserId && removingUserId === removeMemberUserId)}
+        onOpenChange={(open) => {
+          setRemoveMemberDialogOpen(open);
+          if (!open) {
+            setRemoveMemberUserId(null);
+            setRemoveMemberLabel("");
+          }
+        }}
+        onConfirm={() => {
+          if (!removeMemberUserId) return;
+          void removeMemberFromSquad(removeMemberUserId);
+          setRemoveMemberDialogOpen(false);
+          setRemoveMemberUserId(null);
+          setRemoveMemberLabel("");
         }}
       />
     </div>
