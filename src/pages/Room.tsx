@@ -354,8 +354,15 @@ export default function Room() {
       setSquadToDelete(null);
     }
   };
-  const removeMemberFromSquad = async (targetUserId: string) => {
+  const removeMemberFromSquad = async (targetUserId: string, targetLabel?: string) => {
     if (!squadId || !targetUserId) return;
+
+    const label = targetLabel || targetUserId.slice(0, 8);
+    const confirmed = window.confirm(
+      `Tem certeza que deseja remover "${label}" da squad?\n\nEle/ela será removido(a) da sala de votação e não conseguirá entrar novamente nesta squad.`,
+    );
+    if (!confirmed) return;
+
     setRemovingUserId(targetUserId);
     try {
       await apiRemoveSquadMember(squadId, targetUserId);
@@ -620,7 +627,7 @@ export default function Room() {
                       canRemove={canOwnerRemoveParticipant(p)}
                       onRemove={() => {
                         if (!p.userId) return;
-                        void removeMemberFromSquad(p.userId);
+                        void removeMemberFromSquad(p.userId, p.name);
                       }}
                     />
                   ))}
@@ -710,7 +717,7 @@ export default function Room() {
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => removeMemberFromSquad(member.userId)}
+                            onClick={() => removeMemberFromSquad(member.userId, member.label)}
                             disabled={removingUserId === member.userId}
                             className="text-destructive hover:text-destructive"
                           >
